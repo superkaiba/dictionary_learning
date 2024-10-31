@@ -6,7 +6,7 @@ from abc import ABC, abstractclassmethod, abstractmethod
 import torch as th
 import torch.nn as nn
 import torch.nn.init as init
-from torch.nn.functional import relu
+from torch.nn.functional import relu, elu
 import einops
 from warnings import warn
 
@@ -481,7 +481,36 @@ class CrossCoderDecoder(nn.Module):
         """
         return th.einsum("bD, lDd -> bld", f, self.weight) + self.bias
 
+class FeatureScaler(th.nn.Module):
+    def __init__(self, dict_size: int, fixed_mask: th.Tensor | None = None, zero_init: bool = False, use_elu: bool = True):
+        super().__init__()
+        self.dict_size = dict_size
+        if fixed_mask is None:
+            self.scaler = th.nn.Parameter(self.get_init_vector(dict_size, use_elu, zero_init))
+        else:
+            self.register_buffer('fixed_mask', fixed_mask)
+            self.scaler = th.nn.Parameter(self.get_init_vector((~fixed_mask).sum(), use_elu, zero_init))
+            self.fixed_scaling_factors = self.get_init_vector(self.dict_size, use_elu, init_zeros=False) # should always be 1 after activation
 
+        if use_elu:
+            self.act_func = lambda x: th.nn.functional.elu(x) + 1
+        else:
+            self.act_func = th.nn.ReLU()
+
+    def get_init_vector(self, size, use_elu: bool = False, init_zeros: bool = False, device: th.device = "cuda"):
+        if use_elu:
+            return th.zeros(size, device=device) if not init_zeros else th.ones(size, device=device) * -10
+        else:
+            return th.ones(size, device=device) if not init_zeros else th.zeros(size, device=device)
+
+    def forward(self, features: th.Tensor):
+        if self.fixed_mask is None:
+            return features * self.act_func(self.scaler)
+        else:
+            fixed_scaling_factors = self.fixed_scaling_factors.clone()
+            fixed_scaling_factors[~self.fixed_mask] = self.scaler
+            return features * self.act_func(fixed_scaling_factors)
+        
 class CrossCoder(Dictionary, nn.Module):
     """
     A cross-coder using the AutoEncoderNew architecture for two models.
@@ -499,18 +528,25 @@ class CrossCoder(Dictionary, nn.Module):
         norm_init_scale: float | None = None,  # neel's default: 0.005
         init_with_transpose=True,
         encoder_layers: list[int] | None = None,
+        feature_scaler: FeatureScaler | None = None,
+        num_decoder_layers: int | None = None,
     ):
         """
         Args:
             same_init_for_all_layers: if True, initialize all layers with the same vector
             norm_init_scale: if not None, initialize the weights with a norm of this value
             init_with_transpose: if True, initialize the decoder weights with the transpose of the encoder weights
+            feature_scaler: Scaler module to scale the features
+            num_decoder_layers: Number of decoder layers. If None, use num_layers.
         """
         super().__init__()
+        if num_decoder_layers is None:
+            num_decoder_layers = num_layers
+
         self.activation_dim = activation_dim
         self.dict_size = dict_size
         self.num_layers = num_layers
-
+        self.feature_scaler = feature_scaler
         self.encoder = CrossCoderEncoder(
             activation_dim,
             dict_size,
@@ -529,7 +565,7 @@ class CrossCoder(Dictionary, nn.Module):
         self.decoder = CrossCoderDecoder(
             activation_dim,
             dict_size,
-            num_layers,
+            num_decoder_layers,
             same_init_for_all_layers=same_init_for_all_layers,
             init_with_weight=decoder_weight,
             norm_init_scale=norm_init_scale,
@@ -554,6 +590,8 @@ class CrossCoder(Dictionary, nn.Module):
         output_features : if True, return the encoded features as well as the decoded x
         """
         f = self.encode(x)
+        if self.feature_scaler is not None:
+            f = self.feature_scaler(f)
         x_hat = self.decode(f)
 
         if output_features:

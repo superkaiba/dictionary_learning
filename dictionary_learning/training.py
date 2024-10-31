@@ -46,7 +46,7 @@ def get_stats(
         total_variance_per_layer = []
         residual_variance_per_layer = []
         
-        for l in range(act.shape[1]):
+        for l in range(act_hat.shape[1]):
             total_variance_per_layer.append(t.var(act[:, l, :], dim=0).cpu().sum())
             residual_variance_per_layer.append(t.var(act[:, l, :] - act_hat[:, l, :], dim=0).cpu().sum())
             out[f"cl{l}_frac_variance_explained"] = 1 - residual_variance_per_layer[l] / total_variance_per_layer[l]
@@ -106,18 +106,20 @@ def run_validation(
         frac_variance_explained.append(stats["frac_variance_explained"])
         if isinstance(trainer, CrossCoderTrainer):
             for l in range(act.shape[1]):
-                frac_variance_explained_per_layer[l].append(stats[f"cl{l}_frac_variance_explained"])
+                if f"cl{l}_frac_variance_explained" in stats:
+                    frac_variance_explained_per_layer[l].append(stats[f"cl{l}_frac_variance_explained"])
 
     log = {}
     log["val/frac_deads"] = t.stack(deads).all(dim=0).float().mean().item()
     log["val/l0"] = t.tensor(l0).mean().item()
     log["val/frac_variance_explained"] = t.tensor(frac_variance_explained).mean()
     if isinstance(trainer, CrossCoderTrainer):
-        for l in range(act.shape[1]):
+        for l in frac_variance_explained_per_layer:
             log[f"val/cl{l}_frac_variance_explained"] = t.tensor(frac_variance_explained_per_layer[l]).mean()
     if step is not None:
         log["step"] = step
     wandb.log(log, step=step)
+    return log
 
 def trainSAE(
     data,
@@ -134,6 +136,8 @@ def trainSAE(
     validation_data=None,
     transcoder=False,
     run_cfg={},
+    end_of_step_logging_fn=None,
+    save_last_eval=True,
 ):
     """
     Train SAE using the given trainer
@@ -186,9 +190,16 @@ def trainSAE(
             print(f"Validating at step {step}")
             run_validation(trainer, validation_data, step=step)
 
+        if end_of_step_logging_fn is not None:
+            end_of_step_logging_fn(trainer, step)
     try:
-        run_validation(trainer, validation_data, step=step)
-    except Exception as e:
+        last_eval_logs = run_validation(trainer, validation_data, step=step)
+        if save_last_eval:
+            save_dir = os.path.join(save_dir, trainer.config["wandb_name"].lower())
+            os.makedirs(save_dir, exist_ok=True)
+            with open(os.path.join(save_dir, f"last_eval_logs.json"), "w") as f:
+                json.dump(last_eval_logs, f)
+    except Exception as e:  
         print(f"Error during final validation: {str(e)}")
 
     # save final SAE
