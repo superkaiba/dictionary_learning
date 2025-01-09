@@ -15,13 +15,16 @@ from .evaluation import evaluate
 from .trainers.standard import StandardTrainer
 from .trainers.crosscoder import CrossCoderTrainer
 
+
 def get_stats(
     trainer,
     act: t.Tensor,
-    deads_sum: bool=True,
+    deads_sum: bool = True,
 ):
     with t.no_grad():
-        act, act_hat, f, losslog = trainer.loss(act, step=0, logging=True, return_deads=True)
+        act, act_hat, f, losslog = trainer.loss(
+            act, step=0, logging=True, return_deads=True
+        )
 
     # L0
     l0 = (f != 0).float().detach().cpu().sum(dim=-1).mean().item()
@@ -32,12 +35,16 @@ def get_stats(
     }
     if losslog["deads"] is not None:
         total_feats = losslog["deads"].shape[0]
-        out["frac_deads"] = losslog["deads"].sum().item() / total_feats if deads_sum else losslog["deads"]
+        out["frac_deads"] = (
+            losslog["deads"].sum().item() / total_feats
+            if deads_sum
+            else losslog["deads"]
+        )
 
     # fraction of variance explained
     if act.dim() == 2:
         # act.shape: [batch, d_model]
-         # fraction of variance explained
+        # fraction of variance explained
         total_variance = t.var(act, dim=0).sum()
         residual_variance = t.var(act - act_hat, dim=0).sum()
         frac_variance_explained = 1 - residual_variance / total_variance
@@ -48,8 +55,12 @@ def get_stats(
         
         for l in range(act_hat.shape[1]):
             total_variance_per_layer.append(t.var(act[:, l, :], dim=0).cpu().sum())
-            residual_variance_per_layer.append(t.var(act[:, l, :] - act_hat[:, l, :], dim=0).cpu().sum())
-            out[f"cl{l}_frac_variance_explained"] = 1 - residual_variance_per_layer[l] / total_variance_per_layer[l]
+            residual_variance_per_layer.append(
+                t.var(act[:, l, :] - act_hat[:, l, :], dim=0).cpu().sum()
+            )
+            out[f"cl{l}_frac_variance_explained"] = (
+                1 - residual_variance_per_layer[l] / total_variance_per_layer[l]
+            )
         total_variance = sum(total_variance_per_layer)
         residual_variance = sum(residual_variance_per_layer)
         frac_variance_explained = 1 - residual_variance / total_variance
@@ -58,13 +69,14 @@ def get_stats(
 
     return out
 
+
 def log_stats(
     trainer,
     step: int,
     act: t.Tensor,
     activations_split_by_head: bool,
     transcoder: bool,
-    stage: str="train",
+    stage: str = "train",
 ):
     with t.no_grad():
         log = {}
@@ -87,11 +99,12 @@ def log_stats(
 
         wandb.log(log, step=step)
 
+
 @t.no_grad()
 def run_validation(
     trainer,
     validation_data,
-    step: int=None,
+    step: int = None,
 ):
     l0 = []
     frac_variance_explained = []
@@ -121,6 +134,7 @@ def run_validation(
     wandb.log(log, step=step)
     return log
 
+
 def trainSAE(
     data,
     trainer_config,
@@ -142,14 +156,22 @@ def trainSAE(
     """
     Train SAE using the given trainer
     """
-    assert not(validation_data is None and validate_every_n_steps is not None), "Must provide validation data if validate_every_n_steps is not None"
+    assert not (
+        validation_data is None and validate_every_n_steps is not None
+    ), "Must provide validation data if validate_every_n_steps is not None"
 
     trainer_class = trainer_config["trainer"]
     del trainer_config["trainer"]
     trainer = trainer_class(**trainer_config)
 
     wandb_config = trainer.config | run_cfg
-    wandb.init(entity=wandb_entity, project=wandb_project, config=wandb_config, name=wandb_config["wandb_name"], mode="disabled" if not use_wandb else "online")
+    wandb.init(
+        entity=wandb_entity,
+        project=wandb_project,
+        config=wandb_config,
+        name=wandb_config["wandb_name"],
+        mode="disabled" if not use_wandb else "online",
+    )
 
     # make save dir, export config
     if save_dir is not None:
@@ -170,23 +192,34 @@ def trainSAE(
 
         # logging
         if log_steps is not None and step % log_steps == 0 and step != 0:
-            log_stats(
-                trainer, step, act, activations_split_by_head, transcoder
-            )
+            log_stats(trainer, step, act, activations_split_by_head, transcoder)
 
         # saving
         if save_steps is not None and step % save_steps == 0:
             if save_dir is not None:
-                os.makedirs(os.path.join(save_dir, trainer.config["wandb_name"].lower()), exist_ok=True)
+                os.makedirs(
+                    os.path.join(save_dir, trainer.config["wandb_name"].lower()),
+                    exist_ok=True,
+                )
                 t.save(
-                    trainer.ae.state_dict() if not trainer_config["compile"] else trainer.ae._orig_mod.state_dict(),
-                    os.path.join(save_dir, trainer.config["wandb_name"].lower(), f"ae_{step}.pt"),
+                    (
+                        trainer.ae.state_dict()
+                        if not trainer_config["compile"]
+                        else trainer.ae._orig_mod.state_dict()
+                    ),
+                    os.path.join(
+                        save_dir, trainer.config["wandb_name"].lower(), f"ae_{step}.pt"
+                    ),
                 )
 
         # training
         trainer.update(step, act)
 
-        if validate_every_n_steps is not None and step % validate_every_n_steps == 0 and step != 0:
+        if (
+            validate_every_n_steps is not None
+            and step % validate_every_n_steps == 0
+            and step != 0
+        ):
             print(f"Validating at step {step}")
             run_validation(trainer, validation_data, step=step)
 
@@ -204,8 +237,19 @@ def trainSAE(
 
     # save final SAE
     if save_dir is not None:
-        os.makedirs(os.path.join(save_dir, trainer.config["wandb_name"].lower()), exist_ok=True)
-        t.save(trainer.ae.state_dict() if not trainer_config["compile"] else trainer.ae._orig_mod.state_dict(), os.path.join(save_dir, trainer.config["wandb_name"].lower(), f"ae_final.pt"))
+        os.makedirs(
+            os.path.join(save_dir, trainer.config["wandb_name"].lower()), exist_ok=True
+        )
+        t.save(
+            (
+                trainer.ae.state_dict()
+                if not trainer_config["compile"]
+                else trainer.ae._orig_mod.state_dict()
+            ),
+            os.path.join(
+                save_dir, trainer.config["wandb_name"].lower(), f"ae_final.pt"
+            ),
+        )
 
     if use_wandb:
         wandb.finish()
