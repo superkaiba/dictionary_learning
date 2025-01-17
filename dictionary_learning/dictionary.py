@@ -3,6 +3,8 @@ Defines the dictionary classes
 """
 
 from abc import ABC, abstractclassmethod, abstractmethod
+from huggingface_hub import PyTorchModelHubMixin
+
 import torch as th
 import torch.nn as nn
 import torch.nn.init as init
@@ -11,7 +13,7 @@ import einops
 from warnings import warn
 
 
-class Dictionary(ABC, nn.Module):
+class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
     """
     A dictionary consists of a collection of vectors, an encoder, and a decoder.
     """
@@ -35,11 +37,24 @@ class Dictionary(ABC, nn.Module):
 
     @classmethod
     @abstractmethod
-    def from_pretrained(cls, path, device=None, **kwargs) -> "Dictionary":
+    def from_pretrained(
+        cls, path, from_hub=False, device=None, dtype=None, **kwargs
+    ) -> "Dictionary":
         """
-        Load a pretrained dictionary from a file.
+        Load a pretrained dictionary from a file or hub.
+
+        Args:
+            path: Path to local file or hub model id
+            from_hub: If True, load from HuggingFace hub using PyTorchModelHubMixin
+            device: Device to load the model to
+            **kwargs: Additional arguments passed to loading function
         """
-        pass
+        model = super(Dictionary, cls).from_pretrained(path, **kwargs)
+        if device is not None:
+            model.to(device)
+        if dtype is not None:
+            model.to(dtype=dtype)
+        return model
 
 
 class AutoEncoder(Dictionary, nn.Module):
@@ -96,10 +111,13 @@ class AutoEncoder(Dictionary, nn.Module):
                 return x_hat, x_ghost
 
     @classmethod
-    def from_pretrained(cls, path, dtype=th.float, device=None):
-        """
-        Load a pretrained autoencoder from a file.
-        """
+    def from_pretrained(
+        cls, path, dtype=th.float, from_hub=False, device=None, **kwargs
+    ):
+        if from_hub:
+            return super().from_pretrained(path, dtype=dtype, device=device, **kwargs)
+
+        # Existing custom loading logic
         state_dict = th.load(path)
         dict_size, activation_dim = state_dict["encoder.weight"].shape
         autoencoder = cls(activation_dim, dict_size)
@@ -218,13 +236,15 @@ class GatedAutoEncoder(Dictionary, nn.Module):
         else:
             return x_hat
 
-    def from_pretrained(path, device=None):
-        """
-        Load a pretrained autoencoder from a file.
-        """
+    @classmethod
+    def from_pretrained(cls, path, from_hub=False, device=None, dtype=None, **kwargs):
+        if from_hub:
+            return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
+
+        # Existing custom loading logic
         state_dict = th.load(path)
         dict_size, activation_dim = state_dict["encoder.weight"].shape
-        autoencoder = GatedAutoEncoder(activation_dim, dict_size)
+        autoencoder = cls(activation_dim, dict_size)
         autoencoder.load_state_dict(state_dict)
         if device is not None:
             autoencoder.to(device)
@@ -288,6 +308,7 @@ class JumpReluAutoEncoder(Dictionary, nn.Module):
         cls,
         path: str | None = None,
         load_from_sae_lens: bool = False,
+        from_hub: bool = False,
         dtype: th.dtype = th.float32,
         device: th.device | None = None,
         **kwargs,
@@ -298,9 +319,13 @@ class JumpReluAutoEncoder(Dictionary, nn.Module):
         loading function.
         """
         if not load_from_sae_lens:
+            if from_hub:
+                return super().from_pretrained(
+                    path, device=device, dtype=dtype, **kwargs
+                )
             state_dict = th.load(path)
             dict_size, activation_dim = state_dict["W_enc"].shape
-            autoencoder = JumpReluAutoEncoder(activation_dim, dict_size)
+            autoencoder = cls(activation_dim, dict_size)
             autoencoder.load_state_dict(state_dict)
         else:
             from sae_lens import SAE
@@ -364,13 +389,14 @@ class AutoEncoderNew(Dictionary, nn.Module):
             f = f * self.decoder.weight.norm(dim=0, keepdim=True)
             return x_hat, f
 
-    def from_pretrained(path, device=None):
-        """
-        Load a pretrained autoencoder from a file.
-        """
+    @classmethod
+    def from_pretrained(cls, path, device=None, from_hub=False, dtype=None, **kwargs):
+        if from_hub:
+            return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
+
         state_dict = th.load(path)
         dict_size, activation_dim = state_dict["encoder.weight"].shape
-        autoencoder = AutoEncoderNew(activation_dim, dict_size)
+        autoencoder = cls(activation_dim, dict_size)
         autoencoder.load_state_dict(state_dict)
         if device is not None:
             autoencoder.to(device)
@@ -634,10 +660,15 @@ class CrossCoder(Dictionary, nn.Module):
         path: str,
         dtype: th.dtype = th.float32,
         device: th.device | None = None,
+        from_hub: bool = False,
+        **kwargs,
     ):
         """
         Load a pretrained cross-coder from a file.
         """
+        if from_hub:
+            return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
+
         state_dict = th.load(path, map_location="cpu", weights_only=True)
         if "encoder.weight" not in state_dict:
             warn(
