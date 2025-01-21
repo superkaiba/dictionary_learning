@@ -11,7 +11,7 @@ import torch.nn.init as init
 from torch.nn.functional import relu, elu
 import einops
 from warnings import warn
-
+from typing import Callable
 
 class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
     """
@@ -525,62 +525,6 @@ class CrossCoderDecoder(nn.Module):
             x += self.bias
         return x
 
-class FeatureScaler(th.nn.Module):
-    def __init__(self, dict_size: int, fixed_mask: th.Tensor | None = None, zero_init: bool = False, use_elu: bool = True):
-        super().__init__()
-        self.dict_size = dict_size
-        if fixed_mask is None:
-            self.scaler = th.nn.Parameter(self.get_init_vector(dict_size, use_elu, zero_init))
-        else:
-            self.register_buffer('fixed_mask', fixed_mask)
-            self.scaler = th.nn.Parameter(self.get_init_vector((~fixed_mask).sum(), use_elu, zero_init))
-            self.fixed_mask = fixed_mask
-            # self.fixed_scaling_factors = self.get_init_vector(self.dict_size, use_elu, init_zeros=False) # should always be 1 after activation
-
-        if use_elu:
-            self.act_func = lambda x: th.nn.functional.elu(x) + 1
-        else:
-            self.act_func = th.nn.ReLU()
-
-    def get_init_vector(self, size, use_elu: bool = False, init_zeros: bool = False, device: th.device = "cuda"):
-        if use_elu:
-            return th.zeros(size, device=device) if not init_zeros else th.ones(size, device=device) * -10
-        else:
-            return th.ones(size, device=device) if not init_zeros else th.zeros(size, device=device)
-
-    def forward(self, features: th.Tensor):
-        if self.fixed_mask is None:
-            return features * self.act_func(self.scaler)
-        else:
-            features[:, self.fixed_mask] *= self.act_func(self.scaler)
-            return features
-        
-class IndividualFeatureScaler(th.nn.Module):
-    def __init__(self, dict_size: int, feature_indices: th.Tensor | None = None, zero_init: bool = False, use_elu: bool = True):
-        super().__init__()
-        self.dict_size = dict_size
-        self.scaler = th.nn.Parameter(self.get_init_vector(len(feature_indices), use_elu, zero_init))
-        self.feature_indices = feature_indices
-
-        if use_elu:
-            self.act_func = lambda x: th.nn.functional.elu(x) + 1
-        else:
-            self.act_func = th.nn.ReLU()
-
-    def get_init_vector(self, size, use_elu: bool = False, init_zeros: bool = False, device: th.device = "cuda"):
-        if use_elu:
-            return th.zeros(size, device=device) if not init_zeros else th.ones(size, device=device) * -10
-        else:
-            return th.ones(size, device=device) if not init_zeros else th.zeros(size, device=device)
-
-    def forward(self, features: th.Tensor):
-        # features: (batch_size, num_features)
-        batch_size, num_features = features.shape
-        features = features.unsqueeze(1).repeat(1, num_features, 1) # (batch_size, num_features, num_features)
-        features[:, th.arange(num_features), th.arange(num_features)] *= self.act_func(self.scaler)
-        # flatten & return 
-        return features.reshape(batch_size*num_features, num_features)
-
 class CrossCoder(Dictionary, nn.Module):
     """
     A cross-coder using the AutoEncoderNew architecture for two models.
@@ -598,7 +542,7 @@ pl
         norm_init_scale: float | None = None,  # neel's default: 0.005
         init_with_transpose=True,
         encoder_layers: list[int] | None = None,
-        feature_scaler: FeatureScaler | None = None,
+        latent_processor: Callable | None = None,
         num_decoder_layers: int | None = None,
     ):
         """
@@ -606,7 +550,7 @@ pl
             same_init_for_all_layers: if True, initialize all layers with the same vector
             norm_init_scale: if not None, initialize the weights with a norm of this value
             init_with_transpose: if True, initialize the decoder weights with the transpose of the encoder weights
-            feature_scaler: Scaler module to scale the features
+            latent_processor: Function to process the latents after encoding
             num_decoder_layers: Number of decoder layers. If None, use num_layers.
         """
         super().__init__()
@@ -616,7 +560,7 @@ pl
         self.activation_dim = activation_dim
         self.dict_size = dict_size
         self.num_layers = num_layers
-        self.feature_scaler = feature_scaler
+        self.latent_processor = latent_processor
         self.encoder = CrossCoderEncoder(
             activation_dim,
             dict_size,
@@ -670,8 +614,8 @@ pl
         output_features : if True, return the encoded features as well as the decoded x
         """
         f = self.encode(x)
-        if self.feature_scaler is not None:
-            f = self.feature_scaler(f)
+        if self.latent_processor is not None:
+            f = self.latent_processor(f)
         x_hat = self.decode(f)
 
         if output_features:
