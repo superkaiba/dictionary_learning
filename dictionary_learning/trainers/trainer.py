@@ -28,3 +28,7 @@ class SAETrainer:
         return {
             "wandb_name": "trainer",
         }
+
+    @property
+    def model(self):
+        return self.ae

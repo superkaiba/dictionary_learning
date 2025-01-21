@@ -13,7 +13,7 @@ import wandb
 from .dictionary import AutoEncoder
 from .evaluation import evaluate
 from .trainers.standard import StandardTrainer
-from .trainers.crosscoder import CrossCoderTrainer, IndividualFeatureScalerTrainer
+from .trainers.crosscoder import CrossCoderTrainer
 
 def get_stats(
     trainer,
@@ -133,6 +133,13 @@ def run_validation(
     return log
 
 
+def save_model(trainer, checkpoint_name, save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+    t.save(
+        trainer.model.state_dict(),
+        os.path.join(save_dir, checkpoint_name)
+    )
+
 def trainSAE(
     data,
     trainer_config,
@@ -196,28 +203,7 @@ def trainSAE(
         if save_steps is not None and step % save_steps == 0:
             print(f"Saving at step {step}")
             if save_dir is not None:
-                os.makedirs(
-                    os.path.join(save_dir, trainer.config["wandb_name"].lower()),
-                    exist_ok=True,
-                )
-                if isinstance(trainer, IndividualFeatureScalerTrainer):
-                    t.save(
-                        trainer.feature_scaler.state_dict(),
-                        os.path.join(
-                            save_dir, trainer.config["wandb_name"].lower(), f"scaler_{step}.pt"
-                        ),
-                    )
-                else:
-                    t.save(
-                        (
-                            trainer.ae.state_dict()
-                            if not trainer_config["compile"]
-                            else trainer.ae._orig_mod.state_dict()
-                        ),
-                        os.path.join(
-                            save_dir, trainer.config["wandb_name"].lower(), f"ae_{step}.pt"
-                        ),
-                    )
+                save_model(trainer, f"checkpoint_{step}.pt", save_dir)
 
         # training
         trainer.update(step, act)
@@ -244,19 +230,7 @@ def trainSAE(
 
     # save final SAE
     if save_dir is not None:
-        os.makedirs(
-            os.path.join(save_dir, trainer.config["wandb_name"].lower()), exist_ok=True
-        )
-        t.save(
-            (
-                trainer.ae.state_dict()
-                if not trainer_config["compile"]
-                else trainer.ae._orig_mod.state_dict()
-            ),
-            os.path.join(
-                save_dir, trainer.config["wandb_name"].lower(), f"ae_final.pt"
-            ),
-        )
+        save_model(trainer, f"model_final.pt", save_dir)
 
     if use_wandb:
         wandb.finish()
