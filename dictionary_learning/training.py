@@ -13,8 +13,7 @@ import wandb
 from .dictionary import AutoEncoder
 from .evaluation import evaluate
 from .trainers.standard import StandardTrainer
-from .trainers.crosscoder import CrossCoderTrainer
-
+from .trainers.crosscoder import CrossCoderTrainer, IndividualFeatureScalerTrainer
 
 def get_stats(
     trainer,
@@ -65,8 +64,7 @@ def get_stats(
         residual_variance = sum(residual_variance_per_layer)
         frac_variance_explained = 1 - residual_variance / total_variance
 
-        out["frac_variance_explained"] = frac_variance_explained.item()
-
+    out["frac_variance_explained"] = frac_variance_explained.item()
     return out
 
 
@@ -196,21 +194,30 @@ def trainSAE(
 
         # saving
         if save_steps is not None and step % save_steps == 0:
+            print(f"Saving at step {step}")
             if save_dir is not None:
                 os.makedirs(
                     os.path.join(save_dir, trainer.config["wandb_name"].lower()),
                     exist_ok=True,
                 )
-                t.save(
-                    (
-                        trainer.ae.state_dict()
-                        if not trainer_config["compile"]
-                        else trainer.ae._orig_mod.state_dict()
-                    ),
-                    os.path.join(
-                        save_dir, trainer.config["wandb_name"].lower(), f"ae_{step}.pt"
-                    ),
-                )
+                if isinstance(trainer, IndividualFeatureScalerTrainer):
+                    t.save(
+                        trainer.feature_scaler.state_dict(),
+                        os.path.join(
+                            save_dir, trainer.config["wandb_name"].lower(), f"scaler_{step}.pt"
+                        ),
+                    )
+                else:
+                    t.save(
+                        (
+                            trainer.ae.state_dict()
+                            if not trainer_config["compile"]
+                            else trainer.ae._orig_mod.state_dict()
+                        ),
+                        os.path.join(
+                            save_dir, trainer.config["wandb_name"].lower(), f"ae_{step}.pt"
+                        ),
+                    )
 
         # training
         trainer.update(step, act)

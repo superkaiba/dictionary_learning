@@ -505,7 +505,7 @@ class CrossCoderDecoder(nn.Module):
             self.weight = nn.Parameter(weight)
 
     def forward(
-        self, f: th.Tensor, select_features: list[int] | None = None
+        self, f: th.Tensor, select_features: list[int] | None = None, add_bias: bool = True
     ) -> th.Tensor:  # (batch_size, n_layers, activation_dim)
         # f: (batch_size, n_layers, dict_size)
         """
@@ -520,7 +520,10 @@ class CrossCoderDecoder(nn.Module):
             w = self.weight[:, select_features]
         else:
             w = self.weight
-        return th.einsum("bf, lfd -> bld", f, w) + self.bias
+        x = th.einsum("bf, lfd -> bld", f, w)
+        if add_bias:
+            x += self.bias
+        return x
 
 class FeatureScaler(th.nn.Module):
     def __init__(self, dict_size: int, fixed_mask: th.Tensor | None = None, zero_init: bool = False, use_elu: bool = True):
@@ -531,7 +534,8 @@ class FeatureScaler(th.nn.Module):
         else:
             self.register_buffer('fixed_mask', fixed_mask)
             self.scaler = th.nn.Parameter(self.get_init_vector((~fixed_mask).sum(), use_elu, zero_init))
-            self.fixed_scaling_factors = self.get_init_vector(self.dict_size, use_elu, init_zeros=False) # should always be 1 after activation
+            self.fixed_mask = fixed_mask
+            # self.fixed_scaling_factors = self.get_init_vector(self.dict_size, use_elu, init_zeros=False) # should always be 1 after activation
 
         if use_elu:
             self.act_func = lambda x: th.nn.functional.elu(x) + 1
@@ -548,14 +552,39 @@ class FeatureScaler(th.nn.Module):
         if self.fixed_mask is None:
             return features * self.act_func(self.scaler)
         else:
-            fixed_scaling_factors = self.fixed_scaling_factors.clone()
-            fixed_scaling_factors[~self.fixed_mask] = self.scaler
-            return features * self.act_func(fixed_scaling_factors)
+            features[:, self.fixed_mask] *= self.act_func(self.scaler)
+            return features
         
+class IndividualFeatureScaler(th.nn.Module):
+    def __init__(self, dict_size: int, feature_indices: th.Tensor | None = None, zero_init: bool = False, use_elu: bool = True):
+        super().__init__()
+        self.dict_size = dict_size
+        self.scaler = th.nn.Parameter(self.get_init_vector(len(feature_indices), use_elu, zero_init))
+        self.feature_indices = feature_indices
+
+        if use_elu:
+            self.act_func = lambda x: th.nn.functional.elu(x) + 1
+        else:
+            self.act_func = th.nn.ReLU()
+
+    def get_init_vector(self, size, use_elu: bool = False, init_zeros: bool = False, device: th.device = "cuda"):
+        if use_elu:
+            return th.zeros(size, device=device) if not init_zeros else th.ones(size, device=device) * -10
+        else:
+            return th.ones(size, device=device) if not init_zeros else th.zeros(size, device=device)
+
+    def forward(self, features: th.Tensor):
+        # features: (batch_size, num_features)
+        batch_size, num_features = features.shape
+        features = features.unsqueeze(1).repeat(1, num_features, 1) # (batch_size, num_features, num_features)
+        features[:, th.arange(num_features), th.arange(num_features)] *= self.act_func(self.scaler)
+        # flatten & return 
+        return features.reshape(batch_size*num_features, num_features)
+
 class CrossCoder(Dictionary, nn.Module):
     """
     A cross-coder using the AutoEncoderNew architecture for two models.
-
+pl
     encoder: shape (num_layers, activation_dim, dict_size)
     decoder: shape (num_layers, dict_size, activation_dim)
     """
