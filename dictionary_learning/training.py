@@ -15,6 +15,7 @@ from .evaluation import evaluate
 from .trainers.standard import StandardTrainer
 from .trainers.crosscoder import CrossCoderTrainer
 
+
 def get_stats(
     trainer,
     act: t.Tensor,
@@ -51,7 +52,7 @@ def get_stats(
         # act.shape: [batch, layer, d_model]
         total_variance_per_layer = []
         residual_variance_per_layer = []
-        
+
         for l in range(act_hat.shape[1]):
             total_variance_per_layer.append(t.var(act[:, l, :], dim=0).cpu().sum())
             residual_variance_per_layer.append(
@@ -119,12 +120,16 @@ def run_validation(
         if "frac_variance_explained" in stats:
             frac_variance_explained.append(stats["frac_variance_explained"])
         if "frac_variance_explained_per_feature" in stats:
-            frac_variance_explained_per_feature.append(stats["frac_variance_explained_per_feature"])
+            frac_variance_explained_per_feature.append(
+                stats["frac_variance_explained_per_feature"]
+            )
 
         if isinstance(trainer, CrossCoderTrainer):
             for l in range(act.shape[1]):
                 if f"cl{l}_frac_variance_explained" in stats:
-                    frac_variance_explained_per_layer[l].append(stats[f"cl{l}_frac_variance_explained"])
+                    frac_variance_explained_per_layer[l].append(
+                        stats[f"cl{l}_frac_variance_explained"]
+                    )
 
     log = {}
     if len(deads) > 0:
@@ -134,11 +139,17 @@ def run_validation(
     if len(frac_variance_explained) > 0:
         log["val/frac_variance_explained"] = t.tensor(frac_variance_explained).mean()
     if len(frac_variance_explained_per_feature) > 0:
-        frac_variance_explained_per_feature = t.stack(frac_variance_explained_per_feature).cpu() # [num_features]
-        log["val/frac_variance_explained_per_feature"] = frac_variance_explained_per_feature
+        frac_variance_explained_per_feature = t.stack(
+            frac_variance_explained_per_feature
+        ).cpu()  # [num_features]
+        log["val/frac_variance_explained_per_feature"] = (
+            frac_variance_explained_per_feature
+        )
     if isinstance(trainer, CrossCoderTrainer):
         for l in frac_variance_explained_per_layer:
-            log[f"val/cl{l}_frac_variance_explained"] = t.tensor(frac_variance_explained_per_layer[l]).mean()
+            log[f"val/cl{l}_frac_variance_explained"] = t.tensor(
+                frac_variance_explained_per_layer[l]
+            ).mean()
     if step is not None:
         log["step"] = step
     wandb.log(log, step=step)
@@ -148,10 +159,8 @@ def run_validation(
 
 def save_model(trainer, checkpoint_name, save_dir):
     os.makedirs(save_dir, exist_ok=True)
-    t.save(
-        trainer.model.state_dict(),
-        os.path.join(save_dir, checkpoint_name)
-    )
+    t.save(trainer.model.state_dict(), os.path.join(save_dir, checkpoint_name))
+
 
 def trainSAE(
     data,
@@ -241,7 +250,7 @@ def trainSAE(
         if save_last_eval:
             os.makedirs(save_dir, exist_ok=True)
             t.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
-    except Exception as e:  
+    except Exception as e:
         print(f"Error during final validation: {str(e)}")
 
     # save final SAE

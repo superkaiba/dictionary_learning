@@ -10,6 +10,7 @@ from ..dictionary import CrossCoder
 from collections import namedtuple
 from tqdm import tqdm
 
+
 class CrossCoderTrainer(SAETrainer):
     """
     Standard SAE training scheme for cross-coding.
@@ -81,9 +82,12 @@ class CrossCoderTrainer(SAETrainer):
 
         self.optimizer = th.optim.Adam(self.ae.parameters(), lr=lr)
         if resample_steps is None:
+
             def warmup_fn(step):
                 return min(step / warmup_steps, 1.0)
+
         else:
+
             def warmup_fn(step):
                 return min((step % resample_steps) / warmup_steps, 1.0)
 
@@ -171,4 +175,3 @@ class CrossCoderTrainer(SAETrainer):
             "wandb_name": self.wandb_name,
             "submodule_name": self.submodule_name,
         }
-

@@ -13,6 +13,7 @@ import einops
 from warnings import warn
 from typing import Callable
 
+
 class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
     """
     A dictionary consists of a collection of vectors, an encoder, and a decoder.
@@ -505,7 +506,10 @@ class CrossCoderDecoder(nn.Module):
             self.weight = nn.Parameter(weight)
 
     def forward(
-        self, f: th.Tensor, select_features: list[int] | None = None, add_bias: bool = True
+        self,
+        f: th.Tensor,
+        select_features: list[int] | None = None,
+        add_bias: bool = True,
     ) -> th.Tensor:  # (batch_size, n_layers, activation_dim)
         # f: (batch_size, n_layers, dict_size)
         """
@@ -525,12 +529,13 @@ class CrossCoderDecoder(nn.Module):
             x += self.bias
         return x
 
+
 class CrossCoder(Dictionary, nn.Module):
     """
-    A cross-coder using the AutoEncoderNew architecture for two models.
-pl
-    encoder: shape (num_layers, activation_dim, dict_size)
-    decoder: shape (num_layers, dict_size, activation_dim)
+        A cross-coder using the AutoEncoderNew architecture for two models.
+    pl
+        encoder: shape (num_layers, activation_dim, dict_size)
+        decoder: shape (num_layers, dict_size, activation_dim)
     """
 
     def __init__(
