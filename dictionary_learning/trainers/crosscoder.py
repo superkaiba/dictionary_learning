@@ -113,7 +113,7 @@ class CrossCoderTrainer(SAETrainer):
             state_dict[3]["exp_avg_sq"][:, deads, :] = 0.0
 
     def loss(self, x, logging=False, return_deads=False, **kwargs):
-        x_hat, f = self.ae(x)
+        x_hat, f = self.ae(x, output_features=True)
         l2_loss = th.linalg.norm(x - x_hat, dim=-1).mean()
         l1_loss = f.norm(p=1, dim=-1).mean()
         deads = (f <= 1e-4).all(dim=0)
