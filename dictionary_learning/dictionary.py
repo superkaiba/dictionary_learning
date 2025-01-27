@@ -8,9 +8,10 @@ from huggingface_hub import PyTorchModelHubMixin
 import torch as th
 import torch.nn as nn
 import torch.nn.init as init
-from torch.nn.functional import relu
+from torch.nn.functional import relu, elu
 import einops
 from warnings import warn
+from typing import Callable
 
 
 class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
@@ -505,7 +506,10 @@ class CrossCoderDecoder(nn.Module):
             self.weight = nn.Parameter(weight)
 
     def forward(
-        self, f: th.Tensor, select_features: list[int] | None = None
+        self,
+        f: th.Tensor,
+        select_features: list[int] | None = None,
+        add_bias: bool = True,
     ) -> th.Tensor:  # (batch_size, n_layers, activation_dim)
         # f: (batch_size, n_layers, dict_size)
         """
@@ -520,15 +524,18 @@ class CrossCoderDecoder(nn.Module):
             w = self.weight[:, select_features]
         else:
             w = self.weight
-        return th.einsum("bf, lfd -> bld", f, w) + self.bias
+        x = th.einsum("bf, lfd -> bld", f, w)
+        if add_bias:
+            x += self.bias
+        return x
 
 
 class CrossCoder(Dictionary, nn.Module):
     """
-    A cross-coder using the AutoEncoderNew architecture for two models.
-
-    encoder: shape (num_layers, activation_dim, dict_size)
-    decoder: shape (num_layers, dict_size, activation_dim)
+        A cross-coder using the AutoEncoderNew architecture for two models.
+    pl
+        encoder: shape (num_layers, activation_dim, dict_size)
+        decoder: shape (num_layers, dict_size, activation_dim)
     """
 
     def __init__(
@@ -540,18 +547,25 @@ class CrossCoder(Dictionary, nn.Module):
         norm_init_scale: float | None = None,  # neel's default: 0.005
         init_with_transpose=True,
         encoder_layers: list[int] | None = None,
+        latent_processor: Callable | None = None,
+        num_decoder_layers: int | None = None,
     ):
         """
         Args:
             same_init_for_all_layers: if True, initialize all layers with the same vector
             norm_init_scale: if not None, initialize the weights with a norm of this value
             init_with_transpose: if True, initialize the decoder weights with the transpose of the encoder weights
+            latent_processor: Function to process the latents after encoding
+            num_decoder_layers: Number of decoder layers. If None, use num_layers.
         """
         super().__init__()
+        if num_decoder_layers is None:
+            num_decoder_layers = num_layers
+
         self.activation_dim = activation_dim
         self.dict_size = dict_size
         self.num_layers = num_layers
-
+        self.latent_processor = latent_processor
         self.encoder = CrossCoderEncoder(
             activation_dim,
             dict_size,
@@ -570,7 +584,7 @@ class CrossCoder(Dictionary, nn.Module):
         self.decoder = CrossCoderDecoder(
             activation_dim,
             dict_size,
-            num_layers,
+            num_decoder_layers,
             same_init_for_all_layers=same_init_for_all_layers,
             init_with_weight=decoder_weight,
             norm_init_scale=norm_init_scale,
@@ -605,6 +619,8 @@ class CrossCoder(Dictionary, nn.Module):
         output_features : if True, return the encoded features as well as the decoded x
         """
         f = self.encode(x)
+        if self.latent_processor is not None:
+            f = self.latent_processor(f)
         x_hat = self.decode(f)
 
         if output_features:

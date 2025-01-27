@@ -53,7 +53,7 @@ def get_stats(
         total_variance_per_layer = []
         residual_variance_per_layer = []
 
-        for l in range(act.shape[1]):
+        for l in range(act_hat.shape[1]):
             total_variance_per_layer.append(t.var(act[:, l, :], dim=0).cpu().sum())
             residual_variance_per_layer.append(
                 t.var(act[:, l, :] - act_hat[:, l, :], dim=0).cpu().sum()
@@ -65,8 +65,7 @@ def get_stats(
         residual_variance = sum(residual_variance_per_layer)
         frac_variance_explained = 1 - residual_variance / total_variance
 
-        out["frac_variance_explained"] = frac_variance_explained.item()
-
+    out["frac_variance_explained"] = frac_variance_explained.item()
     return out
 
 
@@ -108,6 +107,7 @@ def run_validation(
 ):
     l0 = []
     frac_variance_explained = []
+    frac_variance_explained_per_feature = []
     deads = []
     if isinstance(trainer, CrossCoderTrainer):
         frac_variance_explained_per_layer = defaultdict(list)
@@ -115,26 +115,51 @@ def run_validation(
         act = act.to(trainer.device)
         stats = get_stats(trainer, act, deads_sum=False)
         l0.append(stats["l0"])
-        deads.append(stats["frac_deads"])
-        frac_variance_explained.append(stats["frac_variance_explained"])
+        if "frac_deads" in stats:
+            deads.append(stats["frac_deads"])
+        if "frac_variance_explained" in stats:
+            frac_variance_explained.append(stats["frac_variance_explained"])
+        if "frac_variance_explained_per_feature" in stats:
+            frac_variance_explained_per_feature.append(
+                stats["frac_variance_explained_per_feature"]
+            )
+
         if isinstance(trainer, CrossCoderTrainer):
             for l in range(act.shape[1]):
-                frac_variance_explained_per_layer[l].append(
-                    stats[f"cl{l}_frac_variance_explained"]
-                )
+                if f"cl{l}_frac_variance_explained" in stats:
+                    frac_variance_explained_per_layer[l].append(
+                        stats[f"cl{l}_frac_variance_explained"]
+                    )
 
     log = {}
-    log["val/frac_deads"] = t.stack(deads).all(dim=0).float().mean().item()
-    log["val/l0"] = t.tensor(l0).mean().item()
-    log["val/frac_variance_explained"] = t.tensor(frac_variance_explained).mean()
+    if len(deads) > 0:
+        log["val/frac_deads"] = t.stack(deads).all(dim=0).float().mean().item()
+    if len(l0) > 0:
+        log["val/l0"] = t.tensor(l0).mean().item()
+    if len(frac_variance_explained) > 0:
+        log["val/frac_variance_explained"] = t.tensor(frac_variance_explained).mean()
+    if len(frac_variance_explained_per_feature) > 0:
+        frac_variance_explained_per_feature = t.stack(
+            frac_variance_explained_per_feature
+        ).cpu()  # [num_features]
+        log["val/frac_variance_explained_per_feature"] = (
+            frac_variance_explained_per_feature
+        )
     if isinstance(trainer, CrossCoderTrainer):
-        for l in range(act.shape[1]):
+        for l in frac_variance_explained_per_layer:
             log[f"val/cl{l}_frac_variance_explained"] = t.tensor(
                 frac_variance_explained_per_layer[l]
             ).mean()
     if step is not None:
         log["step"] = step
     wandb.log(log, step=step)
+
+    return log
+
+
+def save_model(trainer, checkpoint_name, save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+    t.save(trainer.model.state_dict(), os.path.join(save_dir, checkpoint_name))
 
 
 def trainSAE(
@@ -152,6 +177,9 @@ def trainSAE(
     validation_data=None,
     transcoder=False,
     run_cfg={},
+    end_of_step_logging_fn=None,
+    save_last_eval=True,
+    start_of_training_eval=False,
 ):
     """
     Train SAE using the given trainer
@@ -189,28 +217,15 @@ def trainSAE(
         if steps is not None and step >= steps:
             break
         act = act.to(trainer.device)
-
         # logging
         if log_steps is not None and step % log_steps == 0 and step != 0:
             log_stats(trainer, step, act, activations_split_by_head, transcoder)
 
         # saving
         if save_steps is not None and step % save_steps == 0:
+            print(f"Saving at step {step}")
             if save_dir is not None:
-                os.makedirs(
-                    os.path.join(save_dir, trainer.config["wandb_name"].lower()),
-                    exist_ok=True,
-                )
-                t.save(
-                    (
-                        trainer.ae.state_dict()
-                        if not trainer_config["compile"]
-                        else trainer.ae._orig_mod.state_dict()
-                    ),
-                    os.path.join(
-                        save_dir, trainer.config["wandb_name"].lower(), f"ae_{step}.pt"
-                    ),
-                )
+                save_model(trainer, f"checkpoint_{step}.pt", save_dir)
 
         # training
         trainer.update(step, act)
@@ -218,31 +233,29 @@ def trainSAE(
         if (
             validate_every_n_steps is not None
             and step % validate_every_n_steps == 0
-            and step != 0
+            and (start_of_training_eval or step > 0)
         ):
             print(f"Validating at step {step}")
-            run_validation(trainer, validation_data, step=step)
+            logs = run_validation(trainer, validation_data, step=step)
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+                t.save(logs, os.path.join(save_dir, f"eval_logs_{step}.pt"))
+            except:
+                pass
 
+        if end_of_step_logging_fn is not None:
+            end_of_step_logging_fn(trainer, step)
     try:
-        run_validation(trainer, validation_data, step=step)
+        last_eval_logs = run_validation(trainer, validation_data, step=step)
+        if save_last_eval:
+            os.makedirs(save_dir, exist_ok=True)
+            t.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
     except Exception as e:
         print(f"Error during final validation: {str(e)}")
 
     # save final SAE
     if save_dir is not None:
-        os.makedirs(
-            os.path.join(save_dir, trainer.config["wandb_name"].lower()), exist_ok=True
-        )
-        t.save(
-            (
-                trainer.ae.state_dict()
-                if not trainer_config["compile"]
-                else trainer.ae._orig_mod.state_dict()
-            ),
-            os.path.join(
-                save_dir, trainer.config["wandb_name"].lower(), f"ae_final.pt"
-            ),
-        )
+        save_model(trainer, f"model_final.pt", save_dir)
 
     if use_wandb:
         wandb.finish()

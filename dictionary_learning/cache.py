@@ -7,8 +7,9 @@ from typing import Tuple, List
 import numpy as np
 import os
 from tqdm.auto import tqdm
+from multiprocessing import Pool, Manager
+import time
 import json
-
 from .config import DEBUG
 
 if DEBUG:
@@ -32,8 +33,29 @@ class ActivationShard:
     def __getitem__(self, *indices):
         return th.tensor(self.activations[*indices], dtype=th.float32)
 
+def save_shard(activations, store_dir, shard_count, name, io):
+    print(f"Storing activation shard ({activations.shape})")
+    memmap_file = os.path.join(store_dir, f"shard_{shard_count}.memmap")
+    memmap_file_meta = memmap_file.replace(".memmap", ".meta")
+    memmap = np.memmap(
+        memmap_file,
+        dtype=np.float32,
+        mode="w+",
+        shape=(activations.shape[0], activations.shape[1]),
+    )
+    memmap[:] = activations.numpy()
+    memmap.flush()
+    with open(memmap_file_meta, "w") as f:
+        json.dump({"shape": list(activations.shape)}, f)
+    del memmap
+    print(f"Finished storing activations for shard {shard_count}")
 
 class ActivationCache:
+    __pool = None
+    __active_processes = None
+    __process_lock = None
+    __manager = None
+
     def __init__(self, store_dir: str):
         self.store_dir = store_dir
         self.config = json.load(open(os.path.join(store_dir, "config.json"), "r"))
@@ -59,6 +81,29 @@ class ActivationCache:
             return submodule.output[0]
 
     @staticmethod
+    def __init_multiprocessing(max_concurrent_saves: int = 3):
+        if ActivationCache.__pool is None:
+            ActivationCache.__manager = Manager()
+            ActivationCache.__active_processes = ActivationCache.__manager.Value('i', 0)
+            ActivationCache.__process_lock = ActivationCache.__manager.Lock()
+            ActivationCache.__pool = Pool(processes=max_concurrent_saves)
+
+    @staticmethod
+    def cleanup_multiprocessing():
+        if ActivationCache.__pool is not None:
+            # wait for all processes to finish
+            while ActivationCache.__active_processes.value > 0:
+                print(f"Waiting for {ActivationCache.__active_processes.value} save processes to finish")
+                time.sleep(1)
+            ActivationCache.__pool.close()
+            ActivationCache.__pool = None
+            ActivationCache.__manager.shutdown()
+            ActivationCache.__manager = None
+            ActivationCache.__active_processes = None
+            ActivationCache.__process_lock = None
+
+
+    @staticmethod
     def collate_store_shards(
         store_dirs: Tuple[str],
         shard_count: int,
@@ -66,29 +111,61 @@ class ActivationCache:
         submodule_names: Tuple[str],
         shuffle_shards: bool = True,
         io: str = "out",
+        multiprocessing: bool = True,
+        max_concurrent_saves: int = 3,
     ):
+
+        # Create a process pool if multiprocessing is enabled
+        if multiprocessing and ActivationCache.__pool is None:
+            ActivationCache.__init_multiprocessing(max_concurrent_saves)
+
+        if multiprocessing:
+            pool = ActivationCache.__pool
+            active_processes = ActivationCache.__active_processes
+            process_lock = ActivationCache.__process_lock
+
+
         for i, name in enumerate(submodule_names):
             activations = th.cat(
                 activation_cache[i], dim=0
             )  # (N x B x T) x D (N = number of batches per shard)
-            print(f"Storing activation shard ({activations.shape}) for {name} {io}")
+            
             if shuffle_shards:
                 idx = np.random.permutation(activations.shape[0])
                 activations = activations[idx]
-            # use memmap to store activations
-            memmap_file = os.path.join(store_dirs[i], f"shard_{shard_count}.memmap")
-            memmap_file_meta = memmap_file.replace(".memmap", ".meta")
-            memmap = np.memmap(
-                memmap_file,
-                dtype=np.float32,
-                mode="w+",
-                shape=(activations.shape[0], activations.shape[1]),
-            )
-            memmap[:] = activations.numpy()
-            memmap.flush()
-            with open(memmap_file_meta, "w") as f:
-                json.dump({"shape": list(activations.shape)}, f)
-            del memmap
+
+            if multiprocessing:
+                # Wait if we've reached max concurrent processes
+                while active_processes.value >= max_concurrent_saves:
+                    time.sleep(0.1)
+                
+                # Increment active process count
+                with process_lock:
+                    active_processes.value += 1
+
+                def callback(result):
+                    with process_lock:
+                        active_processes.value -= 1
+                print(f"Applying async save for shard {shard_count} (current num of workers: {active_processes.value})")
+                pool.apply_async(
+                    save_shard,
+                    args=(activations, store_dirs[i], shard_count, name, io),
+                    callback=callback
+                )
+            else:
+                save_shard(activations, store_dirs[i], shard_count, name, io)
+        
+
+    @staticmethod
+    def shard_exists(store_dir: str, shard_count: int):
+        if os.path.exists(os.path.join(store_dir, f"shard_{shard_count}.memmap")):
+            # load the meta file
+            with open(os.path.join(store_dir, f"shard_{shard_count}.meta"), "r") as f:
+                shape = json.load(f)["shape"]
+            return shape
+        else:
+            return None
+
 
     @th.no_grad()
     @staticmethod
@@ -107,6 +184,7 @@ class ActivationCache:
         num_workers: int = 8,
         max_total_tokens: int = 10**8,
         last_submodule: nn.Module = None,
+        overwrite: bool = False,
     ):
 
         dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers)
@@ -130,40 +208,50 @@ class ActivationCache:
                 padding=True,
             ).to(model.device)
             attention_mask = tokens["attention_mask"]
-            with model.trace(
-                tokens,
-                **tracer_kwargs,
-            ):
-                for i, submodule in enumerate(submodules):
-                    local_activations = (
-                        ActivationCache.get_activations(submodule, io)
-                        .reshape(-1, d_model)
-                        .save()
-                    )  # (B x T) x D
-                    activation_cache[i].append(local_activations)
 
-                if last_submodule is not None:
-                    last_submodule.output.stop()
+            shape = ActivationCache.shard_exists(store_dir, shard_count)
+            if overwrite or shape is None:
+                with model.trace(
+                    tokens,
+                    **tracer_kwargs,
+                ):
+                    for i, submodule in enumerate(submodules):
+                        local_activations = (
+                            ActivationCache.get_activations(submodule, io)
+                            .reshape(-1, d_model)
+                            .save()
+                        )  # (B x T) x D
+                        activation_cache[i].append(local_activations)
 
-            for i in range(len(submodules)):
-                activation_cache[i][-1] = (
-                    activation_cache[i][-1]
-                    .value[attention_mask.reshape(-1).bool()]
-                    .cpu()
-                    .to(th.float32)
-                )  # remove padding tokens
+                    if last_submodule is not None:
+                        last_submodule.output.stop()
 
-            current_size += activation_cache[0][-1].shape[0]
+                for i in range(len(submodules)):
+                    activation_cache[i][-1] = (
+                        activation_cache[i][-1]
+                        .value[attention_mask.reshape(-1).bool()]
+                        .cpu()
+                        .to(th.float32)
+                    )  # remove padding tokens
+                
+                assert activation_cache[0][-1].shape[0] == attention_mask.sum().item()
+                current_size += activation_cache[0][-1].shape[0]
+            else:
+                current_size += attention_mask.sum().item()
 
             if current_size > shard_size:
-                ActivationCache.collate_store_shards(
-                    store_dirs,
-                    shard_count,
-                    activation_cache,
-                    submodule_names,
-                    shuffle_shards,
-                    io,
-                )
+                if shape is not None and not overwrite:
+                    print(f"Shard {shard_count} already exists. Skipping.")
+                else:
+                    ActivationCache.collate_store_shards(
+                        store_dirs,
+                        shard_count,
+                        activation_cache,
+                        submodule_names,
+                        shuffle_shards,
+                        io,
+                        multiprocessing=True
+                    )
                 shard_count += 1
 
                 total_size += current_size
@@ -182,6 +270,7 @@ class ActivationCache:
                 submodule_names,
                 shuffle_shards,
                 io,
+                multiprocessing=True,
             )
 
         # store configs
@@ -200,6 +289,7 @@ class ActivationCache:
                     },
                     f,
                 )
+        ActivationCache.cleanup_multiprocessing()
         print(f"Finished collecting activations. Total size: {total_size}")
 
 

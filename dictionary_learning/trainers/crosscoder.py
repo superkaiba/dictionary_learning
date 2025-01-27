@@ -3,10 +3,12 @@ Implements the standard SAE training scheme.
 """
 
 import torch as th
+import torch.nn as nn
 from ..trainers.trainer import SAETrainer
 from ..config import DEBUG
 from ..dictionary import CrossCoder
 from collections import namedtuple
+from tqdm import tqdm
 
 
 class CrossCoderTrainer(SAETrainer):
@@ -55,6 +57,7 @@ class CrossCoderTrainer(SAETrainer):
 
         if compile:
             self.ae = th.compile(self.ae)
+
         self.lr = lr
         self.l1_penalty = l1_penalty
         self.warmup_steps = warmup_steps
@@ -64,6 +67,7 @@ class CrossCoderTrainer(SAETrainer):
             self.device = "cuda" if th.cuda.is_available() else "cpu"
         else:
             self.device = device
+
         self.ae.to(self.device)
 
         self.resample_steps = resample_steps
@@ -112,7 +116,7 @@ class CrossCoderTrainer(SAETrainer):
         x_hat, f = self.ae(x, output_features=True)
         l2_loss = th.linalg.norm(x - x_hat, dim=-1).mean()
         l1_loss = f.norm(p=1, dim=-1).mean()
-        deads = (f <= 1e-8).all(dim=0)
+        deads = (f <= 1e-4).all(dim=0)
         if self.steps_since_active is not None:
             # update steps_since_active
             self.steps_since_active[deads] += 1
