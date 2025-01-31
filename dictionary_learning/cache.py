@@ -31,7 +31,7 @@ class ActivationShard:
         return self.activations.shape[0]
 
     def __getitem__(self, *indices):
-        return th.tensor(self.activations[*indices], dtype=th.float32)
+        return th.tensor(self.activations[(*indices,)], dtype=th.float32)
 
 def save_shard(activations, store_dir, shard_count, name, io):
     print(f"Storing activation shard ({activations.shape})")
