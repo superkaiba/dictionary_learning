@@ -33,6 +33,7 @@ class ActivationShard:
     def __getitem__(self, *indices):
         return th.tensor(self.activations[(*indices,)], dtype=th.float32)
 
+
 def save_shard(activations, store_dir, shard_count, name, io):
     print(f"Storing activation shard ({activations.shape})")
     memmap_file = os.path.join(store_dir, f"shard_{shard_count}.memmap")
@@ -49,6 +50,7 @@ def save_shard(activations, store_dir, shard_count, name, io):
         json.dump({"shape": list(activations.shape)}, f)
     del memmap
     print(f"Finished storing activations for shard {shard_count}")
+
 
 class ActivationCache:
     __pool = None
@@ -84,7 +86,7 @@ class ActivationCache:
     def __init_multiprocessing(max_concurrent_saves: int = 3):
         if ActivationCache.__pool is None:
             ActivationCache.__manager = Manager()
-            ActivationCache.__active_processes = ActivationCache.__manager.Value('i', 0)
+            ActivationCache.__active_processes = ActivationCache.__manager.Value("i", 0)
             ActivationCache.__process_lock = ActivationCache.__manager.Lock()
             ActivationCache.__pool = Pool(processes=max_concurrent_saves)
 
@@ -93,7 +95,9 @@ class ActivationCache:
         if ActivationCache.__pool is not None:
             # wait for all processes to finish
             while ActivationCache.__active_processes.value > 0:
-                print(f"Waiting for {ActivationCache.__active_processes.value} save processes to finish")
+                print(
+                    f"Waiting for {ActivationCache.__active_processes.value} save processes to finish"
+                )
                 time.sleep(1)
             ActivationCache.__pool.close()
             ActivationCache.__pool = None
@@ -101,7 +105,6 @@ class ActivationCache:
             ActivationCache.__manager = None
             ActivationCache.__active_processes = None
             ActivationCache.__process_lock = None
-
 
     @staticmethod
     def collate_store_shards(
@@ -124,12 +127,11 @@ class ActivationCache:
             active_processes = ActivationCache.__active_processes
             process_lock = ActivationCache.__process_lock
 
-
         for i, name in enumerate(submodule_names):
             activations = th.cat(
                 activation_cache[i], dim=0
             )  # (N x B x T) x D (N = number of batches per shard)
-            
+
             if shuffle_shards:
                 idx = np.random.permutation(activations.shape[0])
                 activations = activations[idx]
@@ -138,7 +140,7 @@ class ActivationCache:
                 # Wait if we've reached max concurrent processes
                 while active_processes.value >= max_concurrent_saves:
                     time.sleep(0.1)
-                
+
                 # Increment active process count
                 with process_lock:
                     active_processes.value += 1
@@ -146,15 +148,17 @@ class ActivationCache:
                 def callback(result):
                     with process_lock:
                         active_processes.value -= 1
-                print(f"Applying async save for shard {shard_count} (current num of workers: {active_processes.value})")
+
+                print(
+                    f"Applying async save for shard {shard_count} (current num of workers: {active_processes.value})"
+                )
                 pool.apply_async(
                     save_shard,
                     args=(activations, store_dirs[i], shard_count, name, io),
-                    callback=callback
+                    callback=callback,
                 )
             else:
                 save_shard(activations, store_dirs[i], shard_count, name, io)
-        
 
     @staticmethod
     def shard_exists(store_dir: str, shard_count: int):
@@ -165,7 +169,6 @@ class ActivationCache:
             return shape
         else:
             return None
-
 
     @th.no_grad()
     @staticmethod
@@ -233,7 +236,7 @@ class ActivationCache:
                         .cpu()
                         .to(th.float32)
                     )  # remove padding tokens
-                
+
                 assert activation_cache[0][-1].shape[0] == attention_mask.sum().item()
                 current_size += activation_cache[0][-1].shape[0]
             else:
@@ -250,7 +253,7 @@ class ActivationCache:
                         submodule_names,
                         shuffle_shards,
                         io,
-                        multiprocessing=True
+                        multiprocessing=True,
                     )
                 shard_count += 1
 
