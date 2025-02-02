@@ -120,9 +120,6 @@ class ActivationCache:
         multiprocessing: bool = True,
         max_concurrent_saves: int = 3,
     ):
-
-        print(f"Storing activations for shard {shard_count}")
-        return
         # Create a process pool if multiprocessing is enabled
         if multiprocessing and ActivationCache.__pool is None:
             ActivationCache.__init_multiprocessing(max_concurrent_saves)
