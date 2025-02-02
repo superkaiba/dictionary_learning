@@ -63,6 +63,8 @@ class ActivationCache:
             ActivationShard(store_dir, i) for i in range(self.config["shard_count"])
         ]
         self._range_to_shard_idx = np.cumsum([0] + [s.shape[0] for s in self.shards])
+        if "store_tokens" in self.config and self.config["store_tokens"]:
+            self._tokens = th.load(os.path.join(store_dir, "tokens.pt"))
 
     def __len__(self):
         return self.config["total_size"]
@@ -72,6 +74,10 @@ class ActivationCache:
         offset = index - self._range_to_shard_idx[shard_idx]
         shard = self.shards[shard_idx]
         return shard[offset]
+
+    @property
+    def tokens(self):
+        return self._tokens
 
     @staticmethod
     def get_activations(submodule: nn.Module, io: str):
@@ -115,6 +121,8 @@ class ActivationCache:
         max_concurrent_saves: int = 3,
     ):
 
+        print(f"Storing activations for shard {shard_count}")
+        return
         # Create a process pool if multiprocessing is enabled
         if multiprocessing and ActivationCache.__pool is None:
             ActivationCache.__init_multiprocessing(max_concurrent_saves)
@@ -185,11 +193,13 @@ class ActivationCache:
         max_total_tokens: int = 10**8,
         last_submodule: nn.Module = None,
         overwrite: bool = False,
+        store_tokens: bool = False,
     ):
 
         dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers)
 
         activation_cache = [[] for _ in submodules]
+        tokens_cache = []
         store_dirs = [
             os.path.join(store_dir, f"{submodule_names[i]}_{io}")
             for i in range(len(submodules))
@@ -208,6 +218,8 @@ class ActivationCache:
                 padding=True,
             ).to(model.device)
             attention_mask = tokens["attention_mask"]
+            if store_tokens:
+                tokens_cache.append(tokens["input_ids"].reshape(-1)[attention_mask.reshape(-1).bool()])
 
             shape = ActivationCache.shard_exists(store_dir, shard_count)
             if overwrite or shape is None:
@@ -234,6 +246,9 @@ class ActivationCache:
                         .to(th.float32)
                     )  # remove padding tokens
                 
+
+
+                assert len(tokens[-1]) == activation_cache[0][-1].shape[0]
                 assert activation_cache[0][-1].shape[0] == attention_mask.sum().item()
                 current_size += activation_cache[0][-1].shape[0]
             else:
@@ -250,7 +265,7 @@ class ActivationCache:
                         submodule_names,
                         shuffle_shards,
                         io,
-                        multiprocessing=True
+                        multiprocessing=True,
                     )
                 shard_count += 1
 
@@ -273,6 +288,12 @@ class ActivationCache:
                 multiprocessing=True,
             )
 
+        if store_tokens:
+            print(f"Storing tokens...")
+            tokens_cache = th.cat(tokens_cache, dim=0)
+            assert tokens_cache.shape[0] == total_size
+            th.save(tokens_cache, os.path.join(store_dir, "tokens.pt"))
+
         # store configs
         for i, store_dir in enumerate(store_dirs):
             with open(os.path.join(store_dir, "config.json"), "w") as f:
@@ -286,6 +307,7 @@ class ActivationCache:
                         "io": io,
                         "total_size": total_size,
                         "shard_count": shard_count,
+                        "store_tokens": store_tokens,
                     },
                     f,
                 )
@@ -307,6 +329,12 @@ class PairedActivationCache:
             (self.activation_cache_1[index], self.activation_cache_2[index]), dim=0
         )
 
+    @property
+    def tokens(self):
+        return th.stack(
+            (self.activation_cache_1.tokens, self.activation_cache_2.tokens), dim=0
+        )
+
 
 class ActivationCacheTuple:
     def __init__(self, *store_dirs: str):
@@ -322,3 +350,7 @@ class ActivationCacheTuple:
 
     def __getitem__(self, index: int):
         return th.stack([cache[index] for cache in self.activation_caches], dim=0)
+
+    @property
+    def tokens(self):
+        return th.stack([cache.tokens for cache in self.activation_caches], dim=0)
