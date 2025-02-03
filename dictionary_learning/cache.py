@@ -243,9 +243,7 @@ class ActivationCache:
                         .to(th.float32)
                     )  # remove padding tokens
                 
-
-
-                assert len(tokens[-1]) == activation_cache[0][-1].shape[0]
+                assert len(tokens_cache[-1]) == activation_cache[0][-1].shape[0]
                 assert activation_cache[0][-1].shape[0] == attention_mask.sum().item()
                 current_size += activation_cache[0][-1].shape[0]
             else:
@@ -253,6 +251,7 @@ class ActivationCache:
 
             if current_size > shard_size:
                 if shape is not None and not overwrite:
+                    assert shape[0] == sum([token_cache.shape[0] for token_cache in tokens_cache]) - total_size
                     print(f"Shard {shard_count} already exists. Skipping.")
                 else:
                     ActivationCache.collate_store_shards(
