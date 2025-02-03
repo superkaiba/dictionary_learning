@@ -66,7 +66,7 @@ class ActivationCache:
         ]
         self._range_to_shard_idx = np.cumsum([0] + [s.shape[0] for s in self.shards])
         if "store_tokens" in self.config and self.config["store_tokens"]:
-            self._tokens = th.load(os.path.join(store_dir, "tokens.pt"))
+            self._tokens = th.load(os.path.join(store_dir, "tokens.pt"), weights_only=True)
 
     def __len__(self):
         return self.config["total_size"]
@@ -242,8 +242,8 @@ class ActivationCache:
                     activation_cache[i][-1] = (
                         activation_cache[i][-1]
                         .value[attention_mask.reshape(-1).bool()]
-                        .cpu()
                         .to(th.float32)
+                        .cpu()
                     )  # remove padding tokens
                 
                 assert len(tokens_cache[-1]) == activation_cache[0][-1].shape[0]
