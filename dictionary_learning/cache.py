@@ -194,6 +194,7 @@ class ActivationCache:
         last_submodule: nn.Module = None,
         overwrite: bool = False,
         store_tokens: bool = False,
+        multiprocessing: bool = True,
         ignore_first_n_tokens_per_sample: int = 0,
     ):
 
@@ -271,7 +272,7 @@ class ActivationCache:
                         submodule_names,
                         shuffle_shards,
                         io,
-                        multiprocessing=True,
+                        multiprocessing=multiprocessing,
                     )
                 shard_count += 1
 
@@ -291,7 +292,7 @@ class ActivationCache:
                 submodule_names,
                 shuffle_shards,
                 io,
-                multiprocessing=True,
+                multiprocessing=multiprocessing,
             )
 
         if store_tokens:
