@@ -194,6 +194,7 @@ class ActivationCache:
         last_submodule: nn.Module = None,
         overwrite: bool = False,
         store_tokens: bool = False,
+        multiprocessing: bool = True,
     ):
 
         dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers)
@@ -264,7 +265,7 @@ class ActivationCache:
                         submodule_names,
                         shuffle_shards,
                         io,
-                        multiprocessing=True,
+                        multiprocessing=multiprocessing,
                     )
                 shard_count += 1
 
@@ -284,7 +285,7 @@ class ActivationCache:
                 submodule_names,
                 shuffle_shards,
                 io,
-                multiprocessing=True,
+                multiprocessing=multiprocessing,
             )
 
         if store_tokens:
