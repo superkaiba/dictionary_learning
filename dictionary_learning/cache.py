@@ -185,7 +185,7 @@ class ActivationCache:
         store_dir: str,
         batch_size: int = 64,
         context_len: int = 128,
-        shard_size: int = 10**6,
+        shard_size: int = 10**6,    
         d_model: int = 1024,
         shuffle_shards: bool = False,
         io: str = "out",
@@ -197,7 +197,7 @@ class ActivationCache:
         multiprocessing: bool = True,
         ignore_first_n_tokens_per_sample: int = 0,
     ):
-
+        assert not shuffle_shards or not store_tokens, "Shuffling shards and storing tokens is not supported yet"
         dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers)
 
         activation_cache = [[] for _ in submodules]
@@ -213,6 +213,8 @@ class ActivationCache:
         shard_count = 0
         if ignore_first_n_tokens_per_sample > 0:
             model.tokenizer.padding_side = "right"
+
+        print(f"Collecting activations...")
         for batch in tqdm(dataloader, desc="Collecting activations"):
             tokens = model.tokenizer(
                 batch,
@@ -265,6 +267,7 @@ class ActivationCache:
                     assert shape[0] == sum([token_cache.shape[0] for token_cache in tokens_cache]) - total_size
                     print(f"Shard {shard_count} already exists. Skipping.")
                 else:
+                    print(f"Storing shard {shard_count}...", flush=True)
                     ActivationCache.collate_store_shards(
                         store_dirs,
                         shard_count,
