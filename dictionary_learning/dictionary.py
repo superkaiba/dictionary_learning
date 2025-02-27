@@ -12,6 +12,7 @@ from torch.nn.functional import relu, elu
 import einops
 from warnings import warn
 from typing import Callable
+from enum import Enum, auto
 
 
 class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
@@ -529,6 +530,38 @@ class CrossCoderDecoder(nn.Module):
             x += self.bias
         return x
 
+class LossType(Enum):
+    """
+    Enumeration of supported loss types for dictionary learning.
+    
+    Attributes:
+        CROSSCODER: Loss type for cross-coder models
+        SAE: Loss type for sparse autoencoder models
+    """
+    CROSSCODER = auto()
+    SAE = auto()
+    MIXED = auto()
+    
+    @classmethod
+    def from_string(cls, loss_type_str: str) -> "LossType":
+        """
+        Initialize a LossType from a string representation.
+        
+        Args:
+            loss_type_str: String representation of the loss type
+            
+        Returns:
+            The corresponding LossType enum value
+            
+        Raises:
+            ValueError: If the string does not match any LossType
+        """
+        loss_type_str = loss_type_str.upper()
+        for loss_type in cls:
+            if loss_type.name == loss_type_str:
+                return loss_type
+        raise ValueError(f"Unknown loss type: {loss_type_str}. Available types: {[lt.name for lt in cls]}")
+
 
 class CrossCoder(Dictionary, nn.Module):
     """
@@ -549,6 +582,9 @@ class CrossCoder(Dictionary, nn.Module):
         encoder_layers: list[int] | None = None,
         latent_processor: Callable | None = None,
         num_decoder_layers: int | None = None,
+        sparsity_loss_type: LossType | None = LossType.CROSSCODER,
+        sparsity_loss_alpha_sae: float | None = 1.0,
+        sparsity_loss_alpha_cc: float | None = 0.1,
     ):
         """
         Args:
@@ -557,6 +593,9 @@ class CrossCoder(Dictionary, nn.Module):
             init_with_transpose: if True, initialize the decoder weights with the transpose of the encoder weights
             latent_processor: Function to process the latents after encoding
             num_decoder_layers: Number of decoder layers. If None, use num_layers.
+            sparsity_loss_type: Sparsity loss type to use for the cross-coder
+            sparsity_loss_alpha_sae: Weight of SAE loss for the sparsity loss MIXED 
+            sparsity_loss_alpha_cc: Weight of CC loss for the sparsity loss MIXED
         """
         super().__init__()
         if num_decoder_layers is None:
@@ -566,6 +605,9 @@ class CrossCoder(Dictionary, nn.Module):
         self.dict_size = dict_size
         self.num_layers = num_layers
         self.latent_processor = latent_processor
+        self.sparsity_loss_type = sparsity_loss_type
+        self.sparsity_loss_alpha_sae = sparsity_loss_alpha_sae
+        self.sparsity_loss_alpha_cc = sparsity_loss_alpha_cc
         self.encoder = CrossCoderEncoder(
             activation_dim,
             dict_size,
@@ -574,6 +616,7 @@ class CrossCoder(Dictionary, nn.Module):
             norm_init_scale=norm_init_scale,
             encoder_layers=encoder_layers,
         )
+
         if init_with_transpose:
             decoder_weight = einops.rearrange(
                 self.encoder.weight.data.clone(),
@@ -590,6 +633,22 @@ class CrossCoder(Dictionary, nn.Module):
             norm_init_scale=norm_init_scale,
         )
 
+    def get_sparsity_loss_weight(self, select_features: list[int] | None = None) -> th.Tensor:
+        if select_features is not None:
+            dw = self.decoder.weight[:, select_features]
+        else:
+            dw = self.decoder.weight
+
+        if self.sparsity_loss_type == LossType.SAE:
+            weight_norm = dw.norm(dim=(0,2)).unsqueeze(0)
+        elif self.sparsity_loss_type == LossType.MIXED:
+            weight_norm_sae = dw.norm(dim=(0,2)).unsqueeze(0)
+            weight_norm_cc = dw.norm(dim=2).sum(dim=0, keepdim=True)
+            weight_norm = weight_norm_sae * self.sparsity_loss_alpha_sae + weight_norm_cc * self.sparsity_loss_alpha_cc
+        else:
+            weight_norm = dw.norm(dim=2).sum(dim=0, keepdim=True)
+        return weight_norm
+
     def encode(
         self, x: th.Tensor, **kwargs
     ) -> th.Tensor:  # (batch_size, n_layers, dict_size)
@@ -600,11 +659,8 @@ class CrossCoder(Dictionary, nn.Module):
         self, x: th.Tensor, select_features: list[int] | None = None, **kwargs
     ) -> th.Tensor:
         f = self.encode(x, select_features=select_features, **kwargs)
-        if select_features is not None:
-            dw = self.decoder.weight[:, select_features]
-        else:
-            dw = self.decoder.weight
-        return f * dw.norm(dim=2).sum(dim=0, keepdim=True)
+        weight_norm = self.get_sparsity_loss_weight(select_features)
+        return f * weight_norm
 
     def decode(
         self, f: th.Tensor, **kwargs
@@ -625,10 +681,8 @@ class CrossCoder(Dictionary, nn.Module):
 
         if output_features:
             # Scale features by decoder column norms
-            f_scaled = f * self.decoder.weight.norm(dim=2).sum(
-                dim=0, keepdim=True
-            )  # Also sum across layers for the loss
-            return x_hat, f_scaled
+            weight_norm = self.get_sparsity_loss_weight()
+            return x_hat, f * weight_norm
         else:
             return x_hat
 
