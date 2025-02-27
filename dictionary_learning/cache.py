@@ -185,7 +185,7 @@ class ActivationCache:
         store_dir: str,
         batch_size: int = 64,
         context_len: int = 128,
-        shard_size: int = 10**6,
+        shard_size: int = 10**6,    
         d_model: int = 1024,
         shuffle_shards: bool = False,
         io: str = "out",
@@ -195,8 +195,9 @@ class ActivationCache:
         overwrite: bool = False,
         store_tokens: bool = False,
         multiprocessing: bool = True,
+        ignore_first_n_tokens_per_sample: int = 0,
     ):
-
+        assert not shuffle_shards or not store_tokens, "Shuffling shards and storing tokens is not supported yet"
         dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers)
 
         activation_cache = [[] for _ in submodules]
@@ -210,6 +211,10 @@ class ActivationCache:
         total_size = 0
         current_size = 0
         shard_count = 0
+        if ignore_first_n_tokens_per_sample > 0:
+            model.tokenizer.padding_side = "right"
+
+        print(f"Collecting activations...")
         for batch in tqdm(dataloader, desc="Collecting activations"):
             tokens = model.tokenizer(
                 batch,
@@ -219,8 +224,12 @@ class ActivationCache:
                 padding=True,
             ).to(model.device)
             attention_mask = tokens["attention_mask"]
+
+            store_mask = attention_mask.clone()
+            if ignore_first_n_tokens_per_sample > 0:
+                store_mask[:, :ignore_first_n_tokens_per_sample] = 0
             if store_tokens:
-                tokens_cache.append(tokens["input_ids"].reshape(-1)[attention_mask.reshape(-1).bool()])
+                tokens_cache.append(tokens["input_ids"].reshape(-1)[store_mask.reshape(-1).bool()])
 
             shape = ActivationCache.shard_exists(store_dir, shard_count)
             if overwrite or shape is None:
@@ -242,22 +251,23 @@ class ActivationCache:
                 for i in range(len(submodules)):
                     activation_cache[i][-1] = (
                         activation_cache[i][-1]
-                        .value[attention_mask.reshape(-1).bool()]
+                        .value[store_mask.reshape(-1).bool()]
                         .to(th.float32)
                         .cpu()
                     )  # remove padding tokens
                 
                 assert len(tokens_cache[-1]) == activation_cache[0][-1].shape[0]
-                assert activation_cache[0][-1].shape[0] == attention_mask.sum().item()
+                assert activation_cache[0][-1].shape[0] == store_mask.sum().item()
                 current_size += activation_cache[0][-1].shape[0]
             else:
-                current_size += attention_mask.sum().item()
+                current_size += store_mask.sum().item()
 
             if current_size > shard_size:
                 if shape is not None and not overwrite:
                     assert shape[0] == sum([token_cache.shape[0] for token_cache in tokens_cache]) - total_size
                     print(f"Shard {shard_count} already exists. Skipping.")
                 else:
+                    print(f"Storing shard {shard_count}...", flush=True)
                     ActivationCache.collate_store_shards(
                         store_dirs,
                         shard_count,
