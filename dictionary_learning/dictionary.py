@@ -450,6 +450,7 @@ class CrossCoderEncoder(nn.Module):
         x: th.Tensor,
         return_no_sum: bool = False,
         select_features: list[int] | None = None,
+        **kwargs,
     ) -> th.Tensor:  # (batch_size, activation_dim)
         """
         Convert activations to features for each layer

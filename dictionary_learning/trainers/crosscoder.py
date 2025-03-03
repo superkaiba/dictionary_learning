@@ -35,6 +35,7 @@ class CrossCoderTrainer(SAETrainer):
         compile=False,
         dict_class_kwargs={},
         pretrained_ae=None,
+        use_mse_loss=False,
     ):
         super().__init__(seed)
 
@@ -43,6 +44,7 @@ class CrossCoderTrainer(SAETrainer):
         self.lm_name = lm_name
         self.submodule_name = submodule_name
         self.compile = compile
+        self.use_mse_loss = use_mse_loss
         if seed is not None:
             th.manual_seed(seed)
             th.cuda.manual_seed_all(seed)
@@ -115,6 +117,11 @@ class CrossCoderTrainer(SAETrainer):
     def loss(self, x, logging=False, return_deads=False, **kwargs):
         x_hat, f = self.ae(x, output_features=True)
         l2_loss = th.linalg.norm(x - x_hat, dim=-1).mean()
+        mse_loss = (x - x_hat).pow(2).sum(dim=-1).mean()
+        if self.use_mse_loss:
+            recon_loss = mse_loss
+        else:
+            recon_loss = l2_loss
         l1_loss = f.norm(p=1, dim=-1).mean()
         deads = (f <= 1e-4).all(dim=0)
         if self.steps_since_active is not None:
@@ -122,7 +129,7 @@ class CrossCoderTrainer(SAETrainer):
             self.steps_since_active[deads] += 1
             self.steps_since_active[~deads] = 0
 
-        loss = l2_loss + self.l1_penalty * l1_loss
+        loss = recon_loss + self.l1_penalty * l1_loss
 
         if not logging:
             return loss
@@ -133,7 +140,7 @@ class CrossCoderTrainer(SAETrainer):
                 f,
                 {
                     "l2_loss": l2_loss.item(),
-                    "mse_loss": (x - x_hat).pow(2).sum(dim=-1).mean().item(),
+                    "mse_loss": mse_loss.item(),
                     "sparsity_loss": l1_loss.item(),
                     "loss": loss.item(),
                     "deads": deads if return_deads else None,

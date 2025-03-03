@@ -4,5 +4,5 @@ from .p_anneal import PAnnealTrainer
 from .gated_anneal import GatedAnnealTrainer
 from .top_k import TrainerTopK
 from .jumprelu import TrainerJumpRelu
-from .batch_top_k import TrainerBatchTopK, BatchTopKSAE
+from .batch_top_k import BatchTopKTrainer, BatchTopKSAE
 from .crosscoder import CrossCoderTrainer
