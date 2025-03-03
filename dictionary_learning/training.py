@@ -23,7 +23,7 @@ def get_stats(
 ):
     with t.no_grad():
         act, act_hat, f, losslog = trainer.loss(
-            act, step=0, logging=True, return_deads=True
+            act, step=0, logging=True, return_deads=True, use_threshold=True
         )
 
     # L0
@@ -33,7 +33,7 @@ def get_stats(
         "l0": l0,
         **{f"{k}": v for k, v in losslog.items() if k != "deads"},
     }
-    if losslog["deads"] is not None:
+    if "deads" in losslog and losslog["deads"] is not None:
         total_feats = losslog["deads"].shape[0]
         out["frac_deads"] = (
             losslog["deads"].sum().item() / total_feats
@@ -159,8 +159,17 @@ def run_validation(
 
 def save_model(trainer, checkpoint_name, save_dir):
     os.makedirs(save_dir, exist_ok=True)
-    t.save(trainer.model.state_dict(), os.path.join(save_dir, checkpoint_name))
-
+    # Handle the case where the model might be compiled
+    if hasattr(trainer, 'ae'):
+        model = trainer.ae
+        if hasattr(model, '_orig_mod'):  # Check if model is compiled
+            model = model._orig_mod
+        t.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
+    else:
+        model = trainer.model
+        if hasattr(model, '_orig_mod'):  # Check if model is compiled
+            model = model._orig_mod
+        t.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
 
 def trainSAE(
     data,
