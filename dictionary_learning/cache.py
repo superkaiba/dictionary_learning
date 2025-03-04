@@ -11,6 +11,8 @@ from multiprocessing import Pool, Manager
 import time
 import json
 from .config import DEBUG
+from .utils import dtype_to_str, str_to_dtype, torch_to_numpy_dtype
+
 
 if DEBUG:
     tracer_kwargs = {"scan": True, "validate": True}
@@ -19,35 +21,50 @@ else:
 
 
 class ActivationShard:
-    def __init__(self, store_dir: str, shard_idx: int):
+    def __init__(
+        self,
+        store_dir: str,
+        shard_idx: int,
+        dtype: th.dtype,
+    ):
         self.shard_file = os.path.join(store_dir, f"shard_{shard_idx}.memmap")
         with open(self.shard_file.replace(".memmap", ".meta"), "r") as f:
-            self.shape = tuple(json.load(f)["shape"])
+            meta = json.load(f)
+            self.shape = tuple(meta["shape"])
+            self.dtype = str_to_dtype(meta["dtype"])
+            if self.dtype == th.bfloat16:
+                np_dtype = np.int16
+            else:
+                np_dtype = torch_to_numpy_dtype(self.dtype)
         self.activations = np.memmap(
-            self.shard_file, dtype=np.float32, mode="r", shape=self.shape
+            self.shard_file, dtype=np_dtype, mode="r", shape=self.shape
         )
 
     def __len__(self):
         return self.activations.shape[0]
 
     def __getitem__(self, *indices):
-        return th.tensor(self.activations[(*indices,)], dtype=th.float32)
+        return th.tensor(self.activations[(*indices,)]).view(self.dtype)
 
 
 def save_shard(activations, store_dir, shard_count, name, io):
     print(f"Storing activation shard ({activations.shape})")
     memmap_file = os.path.join(store_dir, f"shard_{shard_count}.memmap")
     memmap_file_meta = memmap_file.replace(".memmap", ".meta")
+    dtype = activations.dtype
+    if dtype == th.bfloat16:
+        activations = activations.view(th.int16)
+    activations = activations.numpy()
     memmap = np.memmap(
         memmap_file,
-        dtype=np.float32,
+        dtype=activations.dtype,
         mode="w+",
         shape=(activations.shape[0], activations.shape[1]),
     )
-    memmap[:] = activations.numpy()
+    memmap[:] = activations
     memmap.flush()
     with open(memmap_file_meta, "w") as f:
-        json.dump({"shape": list(activations.shape)}, f)
+        json.dump({"shape": list(activations.shape), "dtype": dtype_to_str(dtype)}, f)
     del memmap
     print(f"Finished storing activations for shard {shard_count}")
 
@@ -61,8 +78,10 @@ class ActivationCache:
     def __init__(self, store_dir: str):
         self.store_dir = store_dir
         self.config = json.load(open(os.path.join(store_dir, "config.json"), "r"))
+        dtype = str_to_dtype(self.config["dtype"])
         self.shards = [
-            ActivationShard(store_dir, i) for i in range(self.config["shard_count"])
+            ActivationShard(store_dir, i, dtype)
+            for i in range(self.config["shard_count"])
         ]
         self._range_to_shard_idx = np.cumsum([0] + [s.shape[0] for s in self.shards])
         if "store_tokens" in self.config and self.config["store_tokens"]:
@@ -218,7 +237,7 @@ class ActivationCache:
         if ignore_first_n_tokens_per_sample > 0:
             model.tokenizer.padding_side = "right"
 
-        print(f"Collecting activations...")
+        print("Collecting activations...")
         for batch in tqdm(dataloader, desc="Collecting activations"):
             tokens = model.tokenizer(
                 batch,
@@ -258,7 +277,6 @@ class ActivationCache:
                     activation_cache[i][-1] = (
                         activation_cache[i][-1]
                         .value[store_mask.reshape(-1).bool()]
-                        .to(th.float32)
                         .cpu()
                     )  # remove padding tokens
 
@@ -294,7 +312,7 @@ class ActivationCache:
                 activation_cache = [[] for _ in submodules]
 
             if total_size > max_total_tokens:
-                print(f"Max total tokens reached. Stopping collection.")
+                print("Max total tokens reached. Stopping collection.")
                 break
 
         if current_size > 0:
@@ -309,7 +327,7 @@ class ActivationCache:
             )
 
         if store_tokens:
-            print(f"Storing tokens...")
+            print("Storing tokens...")
             tokens_cache = th.cat(tokens_cache, dim=0)
             assert tokens_cache.shape[0] == total_size
             th.save(tokens_cache, os.path.join(store_dir, "tokens.pt"))
