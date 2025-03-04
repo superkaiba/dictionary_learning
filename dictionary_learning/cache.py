@@ -66,7 +66,9 @@ class ActivationCache:
         ]
         self._range_to_shard_idx = np.cumsum([0] + [s.shape[0] for s in self.shards])
         if "store_tokens" in self.config and self.config["store_tokens"]:
-            self._tokens = th.load(os.path.join(store_dir, "tokens.pt"), weights_only=True)
+            self._tokens = th.load(
+                os.path.join(store_dir, "tokens.pt"), weights_only=True
+            )
 
     def __len__(self):
         return self.config["total_size"]
@@ -185,7 +187,7 @@ class ActivationCache:
         store_dir: str,
         batch_size: int = 64,
         context_len: int = 128,
-        shard_size: int = 10**6,    
+        shard_size: int = 10**6,
         d_model: int = 1024,
         shuffle_shards: bool = False,
         io: str = "out",
@@ -197,7 +199,9 @@ class ActivationCache:
         multiprocessing: bool = True,
         ignore_first_n_tokens_per_sample: int = 0,
     ):
-        assert not shuffle_shards or not store_tokens, "Shuffling shards and storing tokens is not supported yet"
+        assert (
+            not shuffle_shards or not store_tokens
+        ), "Shuffling shards and storing tokens is not supported yet"
         dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers)
 
         activation_cache = [[] for _ in submodules]
@@ -229,7 +233,9 @@ class ActivationCache:
             if ignore_first_n_tokens_per_sample > 0:
                 store_mask[:, :ignore_first_n_tokens_per_sample] = 0
             if store_tokens:
-                tokens_cache.append(tokens["input_ids"].reshape(-1)[store_mask.reshape(-1).bool()])
+                tokens_cache.append(
+                    tokens["input_ids"].reshape(-1)[store_mask.reshape(-1).bool()]
+                )
 
             shape = ActivationCache.shard_exists(store_dir, shard_count)
             if overwrite or shape is None:
@@ -255,7 +261,7 @@ class ActivationCache:
                         .to(th.float32)
                         .cpu()
                     )  # remove padding tokens
-                
+
                 assert len(tokens_cache[-1]) == activation_cache[0][-1].shape[0]
                 assert activation_cache[0][-1].shape[0] == store_mask.sum().item()
                 current_size += activation_cache[0][-1].shape[0]
@@ -264,7 +270,11 @@ class ActivationCache:
 
             if current_size > shard_size:
                 if shape is not None and not overwrite:
-                    assert shape[0] == sum([token_cache.shape[0] for token_cache in tokens_cache]) - total_size
+                    assert (
+                        shape[0]
+                        == sum([token_cache.shape[0] for token_cache in tokens_cache])
+                        - total_size
+                    )
                     print(f"Shard {shard_count} already exists. Skipping.")
                 else:
                     print(f"Storing shard {shard_count}...", flush=True)

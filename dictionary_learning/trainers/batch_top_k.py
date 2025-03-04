@@ -34,11 +34,15 @@ class BatchTopKSAE(Dictionary, nn.Module):
         self.encoder.bias.data.zero_()
         self.b_dec = nn.Parameter(t.zeros(activation_dim))
 
-    def encode(self, x: t.Tensor, return_active: bool = False, use_threshold: bool = True):
+    def encode(
+        self, x: t.Tensor, return_active: bool = False, use_threshold: bool = True
+    ):
         post_relu_feat_acts_BF = nn.functional.relu(self.encoder(x - self.b_dec))
 
         if use_threshold:
-            encoded_acts_BF = post_relu_feat_acts_BF * (post_relu_feat_acts_BF > self.threshold)
+            encoded_acts_BF = post_relu_feat_acts_BF * (
+                post_relu_feat_acts_BF > self.threshold
+            )
         else:
             # Flatten and perform batch top-k
             flattened_acts = post_relu_feat_acts_BF.flatten()
@@ -146,12 +150,18 @@ class BatchTopKTrainer(SAETrainer):
         self.dead_feature_threshold = 10_000_000
         self.top_k_aux = activation_dim // 2  # Heuristic from B.1 of the paper
         self.num_tokens_since_fired = t.zeros(dict_size, dtype=t.long, device=device)
-        self.logging_parameters = ["effective_l0", "dead_features", "pre_norm_auxk_loss"]
+        self.logging_parameters = [
+            "effective_l0",
+            "dead_features",
+            "pre_norm_auxk_loss",
+        ]
         self.effective_l0 = -1
         self.dead_features = -1
         self.pre_norm_auxk_loss = -1
 
-        self.optimizer = t.optim.Adam(self.ae.parameters(), lr=self.lr, betas=(0.9, 0.999))
+        self.optimizer = t.optim.Adam(
+            self.ae.parameters(), lr=self.lr, betas=(0.9, 0.999)
+        )
 
         lr_fn = get_lr_schedule(steps, warmup_steps, decay_start=decay_start)
 
@@ -170,19 +180,28 @@ class BatchTopKTrainer(SAETrainer):
             auxk_acts, auxk_indices = auxk_latents.topk(k_aux, sorted=False)
 
             auxk_buffer_BF = t.zeros_like(post_relu_acts_BF)
-            auxk_acts_BF = auxk_buffer_BF.scatter_(dim=-1, index=auxk_indices, src=auxk_acts)
+            auxk_acts_BF = auxk_buffer_BF.scatter_(
+                dim=-1, index=auxk_indices, src=auxk_acts
+            )
 
             # Note: decoder(), not decode(), as we don't want to apply the bias
             x_reconstruct_aux = self.ae.decoder(auxk_acts_BF)
             l2_loss_aux = (
-                (residual_BD.float() - x_reconstruct_aux.float()).pow(2).sum(dim=-1).mean()
+                (residual_BD.float() - x_reconstruct_aux.float())
+                .pow(2)
+                .sum(dim=-1)
+                .mean()
             )
 
             self.pre_norm_auxk_loss = l2_loss_aux
 
             # normalization from OpenAI implementation: https://github.com/openai/sparse_autoencoder/blob/main/sparse_autoencoder/kernels.py#L614
-            residual_mu = residual_BD.mean(dim=0)[None, :].broadcast_to(residual_BD.shape)
-            loss_denom = (residual_BD.float() - residual_mu.float()).pow(2).sum(dim=-1).mean()
+            residual_mu = residual_BD.mean(dim=0)[None, :].broadcast_to(
+                residual_BD.shape
+            )
+            loss_denom = (
+                (residual_BD.float() - residual_mu.float()).pow(2).sum(dim=-1).mean()
+            )
             normalized_auxk_loss = l2_loss_aux / loss_denom
 
             return normalized_auxk_loss.nan_to_num(0.0)
@@ -239,7 +258,11 @@ class BatchTopKTrainer(SAETrainer):
                 x,
                 x_hat,
                 f,
-                {"l2_loss": l2_loss.item(), "auxk_loss": auxk_loss.item(), "loss": loss.item()},
+                {
+                    "l2_loss": l2_loss.item(),
+                    "auxk_loss": auxk_loss.item(),
+                    "loss": loss.item(),
+                },
             )
 
     def update(self, step, x):

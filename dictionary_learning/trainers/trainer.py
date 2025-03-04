@@ -39,7 +39,6 @@ class SAETrainer:
         return self.ae
 
 
-
 # The next two functions could be replaced with the ConstrainedAdam Optimizer
 @torch.no_grad()
 def set_decoder_norm_to_unit_norm(
@@ -114,15 +113,15 @@ def get_lr_schedule(
         Function that computes LR scale factor for a given step
     """
     if decay_start is not None:
-        assert resample_steps is None, (
-            "decay_start and resample_steps are currently mutually exclusive."
-        )
+        assert (
+            resample_steps is None
+        ), "decay_start and resample_steps are currently mutually exclusive."
         assert 0 <= decay_start < total_steps, "decay_start must be >= 0 and < steps."
         assert decay_start > warmup_steps, "decay_start must be > warmup_steps."
         if sparsity_warmup_steps is not None:
-            assert decay_start > sparsity_warmup_steps, (
-                "decay_start must be > sparsity_warmup_steps."
-            )
+            assert (
+                decay_start > sparsity_warmup_steps
+            ), "decay_start must be > sparsity_warmup_steps."
 
     assert 0 <= warmup_steps < total_steps, "warmup_steps must be >= 0 and < steps."
 
@@ -139,8 +138,11 @@ def get_lr_schedule(
 
             # Constant phase
             return 1.0
+
     else:
-        assert 0 < resample_steps < total_steps, "resample_steps must be > 0 and < steps."
+        assert (
+            0 < resample_steps < total_steps
+        ), "resample_steps must be > 0 and < steps."
 
         def lr_schedule(step: int) -> float:
             return min((step % resample_steps) / warmup_steps, 1.0)
@@ -159,9 +161,9 @@ def get_sparsity_warmup_fn(
     """
 
     if sparsity_warmup_steps is not None:
-        assert 0 <= sparsity_warmup_steps < total_steps, (
-            "sparsity_warmup_steps must be >= 0 and < steps."
-        )
+        assert (
+            0 <= sparsity_warmup_steps < total_steps
+        ), "sparsity_warmup_steps must be >= 0 and < steps."
 
     def scale_fn(step: int) -> float:
         if not sparsity_warmup_steps:

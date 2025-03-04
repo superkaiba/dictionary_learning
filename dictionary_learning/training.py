@@ -111,7 +111,9 @@ def run_validation(
     frac_variance_explained = []
     frac_variance_explained_per_feature = []
     deads = []
-    if isinstance(trainer, CrossCoderTrainer) or isinstance(trainer, BatchTopKCrossCoderTrainer):
+    if isinstance(trainer, CrossCoderTrainer) or isinstance(
+        trainer, BatchTopKCrossCoderTrainer
+    ):
         frac_variance_explained_per_layer = defaultdict(list)
     for val_step, act in enumerate(tqdm(validation_data, total=len(validation_data))):
         act = act.to(trainer.device)
@@ -126,7 +128,9 @@ def run_validation(
                 stats["frac_variance_explained_per_feature"]
             )
 
-        if isinstance(trainer, CrossCoderTrainer) or isinstance(trainer, BatchTopKCrossCoderTrainer):
+        if isinstance(trainer, CrossCoderTrainer) or isinstance(
+            trainer, BatchTopKCrossCoderTrainer
+        ):
             for l in range(act.shape[1]):
                 if f"cl{l}_frac_variance_explained" in stats:
                     frac_variance_explained_per_layer[l].append(
@@ -147,7 +151,9 @@ def run_validation(
         log["val/frac_variance_explained_per_feature"] = (
             frac_variance_explained_per_feature
         )
-    if isinstance(trainer, CrossCoderTrainer) or isinstance(trainer, BatchTopKCrossCoderTrainer):
+    if isinstance(trainer, CrossCoderTrainer) or isinstance(
+        trainer, BatchTopKCrossCoderTrainer
+    ):
         for l in frac_variance_explained_per_layer:
             log[f"val/cl{l}_frac_variance_explained"] = t.tensor(
                 frac_variance_explained_per_layer[l]
@@ -162,16 +168,17 @@ def run_validation(
 def save_model(trainer, checkpoint_name, save_dir):
     os.makedirs(save_dir, exist_ok=True)
     # Handle the case where the model might be compiled
-    if hasattr(trainer, 'ae'):
+    if hasattr(trainer, "ae"):
         model = trainer.ae
-        if hasattr(model, '_orig_mod'):  # Check if model is compiled
+        if hasattr(model, "_orig_mod"):  # Check if model is compiled
             model = model._orig_mod
         t.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
     else:
         model = trainer.model
-        if hasattr(model, '_orig_mod'):  # Check if model is compiled
+        if hasattr(model, "_orig_mod"):  # Check if model is compiled
             model = model._orig_mod
         t.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
+
 
 def trainSAE(
     data,
@@ -231,9 +238,24 @@ def trainSAE(
         # logging
         if log_steps is not None and step % log_steps == 0 and step != 0:
             with t.no_grad():
-                log_stats(trainer, step, act, activations_split_by_head, transcoder, use_threshold=False)
+                log_stats(
+                    trainer,
+                    step,
+                    act,
+                    activations_split_by_head,
+                    transcoder,
+                    use_threshold=False,
+                )
                 if isinstance(trainer, BatchTopKCrossCoderTrainer):
-                    log_stats(trainer, step, act, activations_split_by_head, transcoder, use_threshold=True, stage="trainthres")
+                    log_stats(
+                        trainer,
+                        step,
+                        act,
+                        activations_split_by_head,
+                        transcoder,
+                        use_threshold=True,
+                        stage="trainthres",
+                    )
 
         # saving
         if save_steps is not None and step % save_steps == 0:

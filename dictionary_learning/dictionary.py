@@ -531,29 +531,31 @@ class CrossCoderDecoder(nn.Module):
             x += self.bias
         return x
 
+
 class LossType(Enum):
     """
     Enumeration of supported loss types for dictionary learning.
-    
+
     Attributes:
         CROSSCODER: Loss type for cross-coder models
         SAE: Loss type for sparse autoencoder models
     """
+
     CROSSCODER = auto()
     SAE = auto()
     MIXED = auto()
-    
+
     @classmethod
     def from_string(cls, loss_type_str: str) -> "LossType":
         """
         Initialize a LossType from a string representation.
-        
+
         Args:
             loss_type_str: String representation of the loss type
-            
+
         Returns:
             The corresponding LossType enum value
-            
+
         Raises:
             ValueError: If the string does not match any LossType
         """
@@ -561,7 +563,9 @@ class LossType(Enum):
         for loss_type in cls:
             if loss_type.name == loss_type_str:
                 return loss_type
-        raise ValueError(f"Unknown loss type: {loss_type_str}. Available types: {[lt.name for lt in cls]}")
+        raise ValueError(
+            f"Unknown loss type: {loss_type_str}. Available types: {[lt.name for lt in cls]}"
+        )
 
 
 class CrossCoder(Dictionary, nn.Module):
@@ -595,7 +599,7 @@ class CrossCoder(Dictionary, nn.Module):
             latent_processor: Function to process the latents after encoding
             num_decoder_layers: Number of decoder layers. If None, use num_layers.
             sparsity_loss_type: Sparsity loss type to use for the cross-coder
-            sparsity_loss_alpha_sae: Weight of SAE loss for the sparsity loss MIXED 
+            sparsity_loss_alpha_sae: Weight of SAE loss for the sparsity loss MIXED
             sparsity_loss_alpha_cc: Weight of CC loss for the sparsity loss MIXED
         """
         super().__init__()
@@ -634,18 +638,23 @@ class CrossCoder(Dictionary, nn.Module):
             norm_init_scale=norm_init_scale,
         )
 
-    def get_sparsity_loss_weight(self, select_features: list[int] | None = None) -> th.Tensor:
+    def get_sparsity_loss_weight(
+        self, select_features: list[int] | None = None
+    ) -> th.Tensor:
         if select_features is not None:
             dw = self.decoder.weight[:, select_features]
         else:
             dw = self.decoder.weight
 
         if self.sparsity_loss_type == LossType.SAE:
-            weight_norm = dw.norm(dim=(0,2)).unsqueeze(0)
+            weight_norm = dw.norm(dim=(0, 2)).unsqueeze(0)
         elif self.sparsity_loss_type == LossType.MIXED:
-            weight_norm_sae = dw.norm(dim=(0,2)).unsqueeze(0)
+            weight_norm_sae = dw.norm(dim=(0, 2)).unsqueeze(0)
             weight_norm_cc = dw.norm(dim=2).sum(dim=0, keepdim=True)
-            weight_norm = weight_norm_sae * self.sparsity_loss_alpha_sae + weight_norm_cc * self.sparsity_loss_alpha_cc
+            weight_norm = (
+                weight_norm_sae * self.sparsity_loss_alpha_sae
+                + weight_norm_cc * self.sparsity_loss_alpha_cc
+            )
         else:
             weight_norm = dw.norm(dim=2).sum(dim=0, keepdim=True)
         return weight_norm
@@ -759,8 +768,9 @@ class BatchTopKCrossCoder(CrossCoder):
         self.register_buffer("k", th.tensor(k, dtype=th.int))
         self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
 
-
-    def encode(self, x: th.Tensor, return_active: bool = False, use_threshold: bool = True):
+    def encode(
+        self, x: th.Tensor, return_active: bool = False, use_threshold: bool = True
+    ):
         post_relu_f = super().encode(x)
         sparsity_loss_weight = self.get_sparsity_loss_weight()
         post_relu_f_scaled = post_relu_f * sparsity_loss_weight
@@ -769,7 +779,9 @@ class BatchTopKCrossCoder(CrossCoder):
         else:
             # Flatten and perform batch top-k
             flattened_acts_scaled = post_relu_f_scaled.flatten()
-            post_topk = flattened_acts_scaled.topk(self.k * x.size(0), sorted=False, dim=-1)
+            post_topk = flattened_acts_scaled.topk(
+                self.k * x.size(0), sorted=False, dim=-1
+            )
             post_topk_values = post_relu_f.flatten()[post_topk.indices]
             f = (
                 th.zeros_like(flattened_acts_scaled)
@@ -777,14 +789,18 @@ class BatchTopKCrossCoder(CrossCoder):
                 .reshape(post_relu_f.shape)
             )
         if return_active:
-            return f, f * sparsity_loss_weight, f.sum(0) > 0, post_relu_f, post_relu_f_scaled
+            return (
+                f,
+                f * sparsity_loss_weight,
+                f.sum(0) > 0,
+                post_relu_f,
+                post_relu_f_scaled,
+            )
         else:
             return f
 
     def decode(self, f: th.Tensor):
         return super().decode(f)
-
-            
 
     def forward(self, x: th.Tensor, output_features=False):
         """
