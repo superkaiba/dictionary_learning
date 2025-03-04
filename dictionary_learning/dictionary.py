@@ -773,10 +773,10 @@ class BatchTopKCrossCoder(CrossCoder):
         x: th.Tensor,
         return_active: bool = False,
         use_threshold: bool = True,
-        **enc_kwargs,
+        select_features: list[int] | None = None,
     ):
-        post_relu_f = super().encode(x, **enc_kwargs)
-        sparsity_loss_weight = self.get_sparsity_loss_weight()
+        post_relu_f = super().encode(x, select_features=select_features)
+        sparsity_loss_weight = self.get_sparsity_loss_weight(select_features)
         post_relu_f_scaled = post_relu_f * sparsity_loss_weight
         if use_threshold:
             f = post_relu_f * (post_relu_f_scaled > self.threshold)
