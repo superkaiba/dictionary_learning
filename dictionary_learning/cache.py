@@ -31,7 +31,7 @@ class ActivationShard:
         with open(self.shard_file.replace(".memmap", ".meta"), "r") as f:
             meta = json.load(f)
             self.shape = tuple(meta["shape"])
-            self.dtype = str_to_dtype(meta["dtype"])
+            self.dtype = str_to_dtype(meta["dtype"]) if "dtype" in meta else th.float32
             if self.dtype == th.bfloat16:
                 np_dtype = np.int16
             else:
@@ -78,7 +78,10 @@ class ActivationCache:
     def __init__(self, store_dir: str):
         self.store_dir = store_dir
         self.config = json.load(open(os.path.join(store_dir, "config.json"), "r"))
-        dtype = str_to_dtype(self.config["dtype"])
+        if "dtype" in self.config:
+            dtype = str_to_dtype(self.config["dtype"])
+        else:
+            dtype = th.float32
         self.shards = [
             ActivationShard(store_dir, i, dtype)
             for i in range(self.config["shard_count"])
@@ -87,7 +90,7 @@ class ActivationCache:
         if "store_tokens" in self.config and self.config["store_tokens"]:
             self._tokens = th.load(
                 os.path.join(store_dir, "tokens.pt"), weights_only=True
-            )
+            ).cpu()
 
     def __len__(self):
         return self.config["total_size"]
