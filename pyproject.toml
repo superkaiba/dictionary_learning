@@ -20,4 +20,7 @@ dependencies = [
     "torch",
     "nnsight",
     "einops",
+    "pytest",
+    "datasets",
+    "zstandard",
 ]
