@@ -819,3 +819,32 @@ class BatchTopKCrossCoder(CrossCoder):
             return x_hat, f * weight_norm
         else:
             return x_hat
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        path: str,
+        dtype: th.dtype = th.float32,
+        device: th.device | None = None,
+        from_hub: bool = False,
+        **kwargs,
+    ):
+        """
+        Load a pretrained cross-coder from a file.
+        """
+        if from_hub:
+            return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
+
+        state_dict = th.load(path, map_location="cpu", weights_only=True)
+        if "encoder.weight" not in state_dict:
+            warn(
+                "Cross-coder state dict was saved while torch.compiled was enabled. Fixing..."
+            )
+            state_dict = {k.split("_orig_mod.")[1]: v for k, v in state_dict.items()}
+        num_layers, activation_dim, dict_size = state_dict["encoder.weight"].shape
+        cross_coder = cls(activation_dim, dict_size, num_layers, k=state_dict["k"])
+        cross_coder.load_state_dict(state_dict)
+
+        if device is not None:
+            cross_coder = cross_coder.to(device)
+        return cross_coder.to(dtype=dtype)

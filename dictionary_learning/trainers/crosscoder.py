@@ -265,6 +265,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "running_deads",
             "pre_norm_auxk_loss",
         ]
+        self.dict_class_kwargs = dict_class_kwargs
         self.effective_l0 = -1
         self.running_deads = -1
         self.pre_norm_auxk_loss = -1
@@ -441,6 +442,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "lm_name": self.lm_name,
             "wandb_name": self.wandb_name,
             "submodule_name": self.submodule_name,
+            "dict_class_kwargs": self.dict_class_kwargs,
         }
 
     @staticmethod
