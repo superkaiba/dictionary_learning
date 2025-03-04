@@ -747,3 +747,59 @@ class CrossCoder(Dictionary, nn.Module):
             sampled_vecs, dim=-1
         )
         self.encoder.bias[deads] = 0.0
+
+
+class BatchTopKCrossCoder(CrossCoder):
+    def __init__(self, activation_dim, dict_size, num_layers, k: int, *args, **kwargs):
+        super().__init__(activation_dim, dict_size, num_layers, *args, **kwargs)
+        self.activation_dim = activation_dim
+        self.dict_size = dict_size
+        self.num_layers = num_layers
+
+        self.register_buffer("k", th.tensor(k, dtype=th.int))
+        self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
+
+
+    def encode(self, x: th.Tensor, return_active: bool = False, use_threshold: bool = True):
+        post_relu_f = super().encode(x)
+        sparsity_loss_weight = self.get_sparsity_loss_weight()
+        post_relu_f_scaled = post_relu_f * sparsity_loss_weight
+        if use_threshold:
+            f = post_relu_f * (post_relu_f_scaled > self.threshold)
+        else:
+            # Flatten and perform batch top-k
+            flattened_acts_scaled = post_relu_f_scaled.flatten()
+            post_topk = flattened_acts_scaled.topk(self.k * x.size(0), sorted=False, dim=-1)
+            post_topk_values = post_relu_f.flatten()[post_topk.indices]
+            f = (
+                th.zeros_like(flattened_acts_scaled)
+                .scatter_(-1, post_topk.indices, post_topk_values)
+                .reshape(post_relu_f.shape)
+            )
+        if return_active:
+            return f, f * sparsity_loss_weight, f.sum(0) > 0, post_relu_f, post_relu_f_scaled
+        else:
+            return f
+
+    def decode(self, f: th.Tensor):
+        return super().decode(f)
+
+            
+
+    def forward(self, x: th.Tensor, output_features=False):
+        """
+        Forward pass of the cross-coder.
+        x : activations to be encoded and decoded
+        output_features : if True, return the encoded features as well as the decoded x
+        """
+        f = self.encode(x)
+        if self.latent_processor is not None:
+            f = self.latent_processor(f)
+        x_hat = self.decode(f)
+
+        if output_features:
+            # Scale features by decoder column norms
+            weight_norm = self.get_sparsity_loss_weight()
+            return x_hat, f * weight_norm
+        else:
+            return x_hat

@@ -13,17 +13,18 @@ import wandb
 from .dictionary import AutoEncoder
 from .evaluation import evaluate
 from .trainers.standard import StandardTrainer
-from .trainers.crosscoder import CrossCoderTrainer
+from .trainers.crosscoder import CrossCoderTrainer, BatchTopKCrossCoderTrainer
 
 
 def get_stats(
     trainer,
     act: t.Tensor,
     deads_sum: bool = True,
+    use_threshold: bool = True,
 ):
     with t.no_grad():
         act, act_hat, f, losslog = trainer.loss(
-            act, step=0, logging=True, return_deads=True, use_threshold=True
+            act, step=0, logging=True, return_deads=True, use_threshold=use_threshold
         )
 
     # L0
@@ -76,13 +77,14 @@ def log_stats(
     activations_split_by_head: bool,
     transcoder: bool,
     stage: str = "train",
+    use_threshold: bool = True,
 ):
     with t.no_grad():
         log = {}
         if activations_split_by_head:  # x.shape: [batch, pos, n_heads, d_head]
             act = act[..., 0, :]
         if not transcoder:
-            stats = get_stats(trainer, act)
+            stats = get_stats(trainer, act, use_threshold=use_threshold)
             log.update({f"{stage}/{k}": v for k, v in stats.items()})
         else:  # transcoder
             x, x_hat, f, losslog = trainer.loss(act, step=step, logging=True)
@@ -109,7 +111,7 @@ def run_validation(
     frac_variance_explained = []
     frac_variance_explained_per_feature = []
     deads = []
-    if isinstance(trainer, CrossCoderTrainer):
+    if isinstance(trainer, CrossCoderTrainer) or isinstance(trainer, BatchTopKCrossCoderTrainer):
         frac_variance_explained_per_layer = defaultdict(list)
     for val_step, act in enumerate(tqdm(validation_data, total=len(validation_data))):
         act = act.to(trainer.device)
@@ -124,7 +126,7 @@ def run_validation(
                 stats["frac_variance_explained_per_feature"]
             )
 
-        if isinstance(trainer, CrossCoderTrainer):
+        if isinstance(trainer, CrossCoderTrainer) or isinstance(trainer, BatchTopKCrossCoderTrainer):
             for l in range(act.shape[1]):
                 if f"cl{l}_frac_variance_explained" in stats:
                     frac_variance_explained_per_layer[l].append(
@@ -145,7 +147,7 @@ def run_validation(
         log["val/frac_variance_explained_per_feature"] = (
             frac_variance_explained_per_feature
         )
-    if isinstance(trainer, CrossCoderTrainer):
+    if isinstance(trainer, CrossCoderTrainer) or isinstance(trainer, BatchTopKCrossCoderTrainer):
         for l in frac_variance_explained_per_layer:
             log[f"val/cl{l}_frac_variance_explained"] = t.tensor(
                 frac_variance_explained_per_layer[l]
@@ -228,7 +230,10 @@ def trainSAE(
         act = act.to(trainer.device)
         # logging
         if log_steps is not None and step % log_steps == 0 and step != 0:
-            log_stats(trainer, step, act, activations_split_by_head, transcoder)
+            with t.no_grad():
+                log_stats(trainer, step, act, activations_split_by_head, transcoder, use_threshold=False)
+                if isinstance(trainer, BatchTopKCrossCoderTrainer):
+                    log_stats(trainer, step, act, activations_split_by_head, transcoder, use_threshold=True, stage="trainthres")
 
         # saving
         if save_steps is not None and step % save_steps == 0:
