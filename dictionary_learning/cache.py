@@ -25,7 +25,7 @@ class ActivationShard:
         self,
         store_dir: str,
         shard_idx: int,
-        dtype: th.dtype,
+
     ):
         self.shard_file = os.path.join(store_dir, f"shard_{shard_idx}.memmap")
         with open(self.shard_file.replace(".memmap", ".meta"), "r") as f:
@@ -78,12 +78,8 @@ class ActivationCache:
     def __init__(self, store_dir: str):
         self.store_dir = store_dir
         self.config = json.load(open(os.path.join(store_dir, "config.json"), "r"))
-        if "dtype" in self.config:
-            dtype = str_to_dtype(self.config["dtype"])
-        else:
-            dtype = th.float32
         self.shards = [
-            ActivationShard(store_dir, i, dtype)
+            ActivationShard(store_dir, i)
             for i in range(self.config["shard_count"])
         ]
         self._range_to_shard_idx = np.cumsum([0] + [s.shape[0] for s in self.shards])

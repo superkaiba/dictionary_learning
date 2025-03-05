@@ -759,14 +759,22 @@ class CrossCoder(Dictionary, nn.Module):
 
 
 class BatchTopKCrossCoder(CrossCoder):
-    def __init__(self, activation_dim, dict_size, num_layers, k: int, *args, **kwargs):
+    def __init__(self, activation_dim, dict_size, num_layers, k: int | th.Tensor = 100, *args, **kwargs):
         super().__init__(activation_dim, dict_size, num_layers, *args, **kwargs)
         self.activation_dim = activation_dim
         self.dict_size = dict_size
         self.num_layers = num_layers
 
-        self.register_buffer("k", th.tensor(k, dtype=th.int))
+        if not isinstance(k, th.Tensor):
+            k = th.tensor(k, dtype=th.int)
+
+        self.register_buffer("k", k)
         self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
+
+    def get_activations(self, x: th.Tensor, use_threshold: bool = True, **kwargs):
+        f = self.encode(x, use_threshold=use_threshold, **kwargs)
+        weight_norm = self.get_sparsity_loss_weight()
+        return f * weight_norm
 
     def encode(
         self,
@@ -837,7 +845,7 @@ class BatchTopKCrossCoder(CrossCoder):
         Load a pretrained cross-coder from a file.
         """
         if from_hub:
-            return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
+            return super().from_pretrained(path, device=device, dtype=dtype, from_hub=True, **kwargs)
 
         state_dict = th.load(path, map_location="cpu", weights_only=True)
         if "encoder.weight" not in state_dict:
