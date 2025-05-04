@@ -188,7 +188,7 @@ class CrossCoderTrainer(SAETrainer):
             "wandb_name": self.wandb_name,
             "submodule_name": self.submodule_name,
             "use_mse_loss": self.use_mse_loss,
-            "sparsity_loss_type": str(self.ae.sparsity_loss_type),
+            "code_normalization": str(self.ae.code_normalization),
             "sparsity_loss_alpha_sae": self.ae.sparsity_loss_alpha_sae,
             "sparsity_loss_alpha_cc": self.ae.sparsity_loss_alpha_cc,
         }
@@ -394,7 +394,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
                     "loss": loss.item(),
                     "deads": ~did_fire,
                     "threshold": self.ae.threshold.item(),
-                    "sparsity_weight": self.ae.get_sparsity_loss_weight().mean().item(),
+                    "sparsity_weight": self.ae.get_code_normalization().mean().item(),
                 },
             )
 
@@ -434,7 +434,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "activation_dim": self.ae.activation_dim,
             "dict_size": self.ae.dict_size,
             "k": self.ae.k.item(),
-            "sparsity_loss_type": str(self.ae.sparsity_loss_type),
+            "code_normalization": str(self.ae.code_normalization),
             "sparsity_loss_alpha_sae": self.ae.sparsity_loss_alpha_sae,
             "sparsity_loss_alpha_cc": self.ae.sparsity_loss_alpha_cc,
             "device": self.device,
