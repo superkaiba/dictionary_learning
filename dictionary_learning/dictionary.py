@@ -544,6 +544,7 @@ class LossType(Enum):
     CROSSCODER = auto()
     SAE = auto()
     MIXED = auto()
+    NONE = auto()
 
     @classmethod
     def from_string(cls, loss_type_str: str) -> "LossType":
@@ -567,7 +568,24 @@ class LossType(Enum):
             f"Unknown loss type: {loss_type_str}. Available types: {[lt.name for lt in cls]}"
         )
 
+    def __str__(self) -> str:
+        """
+        String representation of the LossType.
 
+        Returns:
+            The name of the loss type in uppercase
+        """
+        return self.name
+
+    def __repr__(self) -> str:
+        """
+        String representation of the LossType.
+
+        Returns:
+            The name of the loss type in uppercase  
+        """
+        return self.name
+    
 class CrossCoder(Dictionary, nn.Module):
     """
         A cross-coder using the AutoEncoderNew architecture for two models.
@@ -655,6 +673,8 @@ class CrossCoder(Dictionary, nn.Module):
                 weight_norm_sae * self.sparsity_loss_alpha_sae
                 + weight_norm_cc * self.sparsity_loss_alpha_cc
             )
+        elif self.sparsity_loss_type == LossType.NONE:
+            weight_norm = th.tensor(1.0)
         else:
             weight_norm = dw.norm(dim=2).sum(dim=0, keepdim=True)
         return weight_norm
@@ -771,9 +791,11 @@ class BatchTopKCrossCoder(CrossCoder):
         self.register_buffer("k", k)
         self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
 
-    def get_activations(self, x: th.Tensor, use_threshold: bool = True, **kwargs):
+    def get_activations(self, x: th.Tensor, use_threshold: bool = True, select_features = None, **kwargs):
         f = self.encode(x, use_threshold=use_threshold, **kwargs)
         weight_norm = self.get_sparsity_loss_weight()
+        if select_features is not None:
+            return (f * weight_norm)[:, select_features]
         return f * weight_norm
 
     def encode(
