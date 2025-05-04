@@ -546,6 +546,7 @@ class CodeNormalization(Enum):
     CROSSCODER = auto()
     SAE = auto()
     MIXED = auto()
+    NONE = auto()
     DECOUPLED = auto()
     @classmethod
     def from_string(cls, code_norm_type_str: str) -> "CodeNormalization":
@@ -568,7 +569,24 @@ class CodeNormalization(Enum):
                 f"Unknown code normalization type: {code_norm_type_str}. Available types: {[lt.name for lt in cls]}"
             )
 
+    def __str__(self) -> str:
+        """
+        String representation of the LossType.
 
+        Returns:
+            The name of the loss type in uppercase
+        """
+        return self.name
+
+    def __repr__(self) -> str:
+        """
+        String representation of the LossType.
+
+        Returns:
+            The name of the loss type in uppercase  
+        """
+        return self.name
+    
 class CrossCoder(Dictionary, nn.Module):
     """
         A cross-coder using the AutoEncoderNew architecture for two models.
@@ -656,6 +674,8 @@ class CrossCoder(Dictionary, nn.Module):
                 weight_norm_sae * self.sparsity_loss_alpha_sae
                 + weight_norm_cc * self.sparsity_loss_alpha_cc
             )
+        elif self.code_normalization == CodeNormalization.NONE:
+            weight_norm = th.tensor(1.0)
         elif self.code_normalization == CodeNormalization.CROSSCODER:
             weight_norm = dw.norm(dim=2).sum(dim=0, keepdim=True)
         elif self.code_normalization == CodeNormalization.DECOUPLED:
@@ -776,7 +796,7 @@ class BatchTopKCrossCoder(CrossCoder):
         self.register_buffer("k", k)
         self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
 
-    def get_activations(self, x: th.Tensor, use_threshold: bool = True, **kwargs):
+    def get_activations(self, x: th.Tensor, use_threshold: bool = True, select_features = None, **kwargs):
         """
         Get the activations of each latents of 
         """
@@ -784,6 +804,8 @@ class BatchTopKCrossCoder(CrossCoder):
         weight_norm = self.get_code_normalization()
         if self.code_normalization == CodeNormalization.DECOUPLED:
             weight_norm = weight_norm.sum(dim=0, keepdim=True)
+        if select_features is not None:
+            return (f * weight_norm)[:, select_features]
         return f * weight_norm
 
     def encode(
