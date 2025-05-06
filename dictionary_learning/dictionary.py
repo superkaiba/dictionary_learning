@@ -407,7 +407,7 @@ class AutoEncoderNew(Dictionary, nn.Module):
 
 class CrossCoderEncoder(nn.Module):
     """
-    A cross-coder encoder
+    A crosscoder encoder
     """
 
     def __init__(
@@ -476,7 +476,7 @@ class CrossCoderEncoder(nn.Module):
 
 class CrossCoderDecoder(nn.Module):
     """
-    A cross-coder decoder
+    A crosscoder decoder
     """
 
     def __init__(
@@ -518,7 +518,7 @@ class CrossCoderDecoder(nn.Module):
         Convert features to activations for each layer
 
         Args:
-            f: (batch_size, dict_size)
+            f: (batch_size, dict_size) or (batch_size, n_layers, dict_size)
         Returns:
             x: (batch_size, n_layers, activation_dim)
         """
@@ -526,10 +526,14 @@ class CrossCoderDecoder(nn.Module):
             w = self.weight[:, select_features]
         else:
             w = self.weight
-        x = th.einsum("bf, lfd -> bld", f, w)
+        if f.dim() == 2:
+            x = th.einsum("bf, lfd -> bld", f, w)
+        else:
+            x = th.einsum("blf, lfd -> bld", f, w)
         if add_bias:
             x += self.bias
         return x
+
 
 class CodeNormalization(Enum):
     """
@@ -548,6 +552,7 @@ class CodeNormalization(Enum):
     MIXED = auto()
     NONE = auto()
     DECOUPLED = auto()
+
     @classmethod
     def from_string(cls, code_norm_type_str: str) -> "CodeNormalization":
         """
@@ -583,13 +588,14 @@ class CodeNormalization(Enum):
         String representation of the LossType.
 
         Returns:
-            The name of the loss type in uppercase  
+            The name of the loss type in uppercase
         """
         return self.name
-    
+
+
 class CrossCoder(Dictionary, nn.Module):
     """
-        A cross-coder using the AutoEncoderNew architecture for two models.
+        A crosscoder using the AutoEncoderNew architecture for two models.
     pl
         encoder: shape (num_layers, activation_dim, dict_size)
         decoder: shape (num_layers, dict_size, activation_dim)
@@ -607,8 +613,8 @@ class CrossCoder(Dictionary, nn.Module):
         latent_processor: Callable | None = None,
         num_decoder_layers: int | None = None,
         code_normalization: CodeNormalization | None = CodeNormalization.CROSSCODER,
-        sparsity_loss_alpha_sae: float | None = 1.0,
-        sparsity_loss_alpha_cc: float | None = 0.1,
+        code_normalization_alpha_sae: float | None = 1.0,
+        code_normalization_alpha_cc: float | None = 0.1,
     ):
         """
         Args:
@@ -617,9 +623,9 @@ class CrossCoder(Dictionary, nn.Module):
             init_with_transpose: if True, initialize the decoder weights with the transpose of the encoder weights
             latent_processor: Function to process the latents after encoding
             num_decoder_layers: Number of decoder layers. If None, use num_layers.
-            code_normalization: Sparsity loss type to use for the cross-coder
-            sparsity_loss_alpha_sae: Weight of SAE loss for the sparsity loss MIXED
-            sparsity_loss_alpha_cc: Weight of CC loss for the sparsity loss MIXED
+            code_normalization: Sparsity loss type to use for the crosscoder
+            code_normalization_alpha_sae: Weight of SAE loss for the sparsity loss MIXED
+            code_normalization_alpha_cc: Weight of CC loss for the sparsity loss MIXED
         """
         super().__init__()
         if num_decoder_layers is None:
@@ -630,8 +636,8 @@ class CrossCoder(Dictionary, nn.Module):
         self.num_layers = num_layers
         self.latent_processor = latent_processor
         self.code_normalization = code_normalization
-        self.sparsity_loss_alpha_sae = sparsity_loss_alpha_sae
-        self.sparsity_loss_alpha_cc = sparsity_loss_alpha_cc
+        self.code_normalization_alpha_sae = code_normalization_alpha_sae
+        self.code_normalization_alpha_cc = code_normalization_alpha_cc
         self.encoder = CrossCoderEncoder(
             activation_dim,
             dict_size,
@@ -671,8 +677,8 @@ class CrossCoder(Dictionary, nn.Module):
             weight_norm_sae = dw.norm(dim=(0, 2)).unsqueeze(0)
             weight_norm_cc = dw.norm(dim=2).sum(dim=0, keepdim=True)
             weight_norm = (
-                weight_norm_sae * self.sparsity_loss_alpha_sae
-                + weight_norm_cc * self.sparsity_loss_alpha_cc
+                weight_norm_sae * self.code_normalization_alpha_sae
+                + weight_norm_cc * self.code_normalization_alpha_cc
             )
         elif self.code_normalization == CodeNormalization.NONE:
             weight_norm = th.tensor(1.0)
@@ -681,7 +687,9 @@ class CrossCoder(Dictionary, nn.Module):
         elif self.code_normalization == CodeNormalization.DECOUPLED:
             weight_norm = dw.norm(dim=2)
         else:
-            raise NotImplementedError(f"Code normalization {self.code_normalization} not implemented")
+            raise NotImplementedError(
+                f"Code normalization {self.code_normalization} not implemented"
+            )
         return weight_norm
 
     def encode(
@@ -695,6 +703,8 @@ class CrossCoder(Dictionary, nn.Module):
     ) -> th.Tensor:
         f = self.encode(x, select_features=select_features, **kwargs)
         weight_norm = self.get_code_normalization(select_features)
+        if self.code_normalization == CodeNormalization.DECOUPLED:
+            weight_norm = weight_norm.sum(dim=0, keepdim=True)
         return f * weight_norm
 
     def decode(
@@ -705,7 +715,7 @@ class CrossCoder(Dictionary, nn.Module):
 
     def forward(self, x: th.Tensor, output_features=False):
         """
-        Forward pass of the cross-coder.
+        Forward pass of the crosscoder.
         x : activations to be encoded and decoded
         output_features : if True, return the encoded features as well as the decoded x
         """
@@ -717,6 +727,8 @@ class CrossCoder(Dictionary, nn.Module):
         if output_features:
             # Scale features by decoder column norms
             weight_norm = self.get_code_normalization()
+            if self.code_normalization == CodeNormalization.DECOUPLED:
+                weight_norm = weight_norm.sum(dim=0, keepdim=True)
             return x_hat, f * weight_norm
         else:
             return x_hat
@@ -731,7 +743,7 @@ class CrossCoder(Dictionary, nn.Module):
         **kwargs,
     ):
         """
-        Load a pretrained cross-coder from a file.
+        Load a pretrained crosscoder from a file.
         """
         if from_hub:
             return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
@@ -739,7 +751,7 @@ class CrossCoder(Dictionary, nn.Module):
         state_dict = th.load(path, map_location="cpu", weights_only=True)
         if "encoder.weight" not in state_dict:
             warn(
-                "Cross-coder state dict was saved while torch.compiled was enabled. Fixing..."
+                "crosscoder state dict was saved while torch.compiled was enabled. Fixing..."
             )
             state_dict = {k.split("_orig_mod.")[1]: v for k, v in state_dict.items()}
         num_layers, activation_dim, dict_size = state_dict["encoder.weight"].shape
@@ -794,15 +806,23 @@ class BatchTopKCrossCoder(CrossCoder):
             k = th.tensor(k, dtype=th.int)
 
         self.register_buffer("k", k)
-        self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
+        threshold = (
+            [-1.0] * num_layers
+            if self.code_normalization == CodeNormalization.DECOUPLED
+            else -1.0
+        )
+        self.register_buffer("threshold", th.tensor(threshold, dtype=th.float32))
+        self.decoupled_code = self.code_normalization == CodeNormalization.DECOUPLED
 
-    def get_activations(self, x: th.Tensor, use_threshold: bool = True, select_features = None, **kwargs):
+    def get_activations(
+        self, x: th.Tensor, use_threshold: bool = True, select_features=None, **kwargs
+    ):
         """
-        Get the activations of each latents of 
+        Get the activations of each latents of
         """
         f = self.encode(x, use_threshold=use_threshold, **kwargs)
         weight_norm = self.get_code_normalization()
-        if self.code_normalization == CodeNormalization.DECOUPLED:
+        if self.decoupled_code:
             weight_norm = weight_norm.sum(dim=0, keepdim=True)
         if select_features is not None:
             return (f * weight_norm)[:, select_features]
@@ -815,16 +835,21 @@ class BatchTopKCrossCoder(CrossCoder):
         use_threshold: bool = True,
         select_features: list[int] | None = None,
     ):
+        if self.decoupled_code:
+            return self.encode_decoupled(
+                x, return_active, use_threshold, select_features
+            )
+        batch_size = x.size(0)
         post_relu_f = super().encode(x, select_features=select_features)
-        sparsity_loss_weight = self.get_code_normalization(select_features)
-        post_relu_f_scaled = post_relu_f * sparsity_loss_weight
+        code_normalization = self.get_code_normalization(select_features)
+        post_relu_f_scaled = post_relu_f * code_normalization
         if use_threshold:
             f = post_relu_f * (post_relu_f_scaled > self.threshold)
         else:
             # Flatten and perform batch top-k
             flattened_acts_scaled = post_relu_f_scaled.flatten()
             post_topk = flattened_acts_scaled.topk(
-                self.k * x.size(0), sorted=False, dim=-1
+                self.k * batch_size, sorted=False, dim=-1
             )
             post_topk_values = post_relu_f.flatten()[post_topk.indices]
             f = (
@@ -835,8 +860,61 @@ class BatchTopKCrossCoder(CrossCoder):
         if return_active:
             return (
                 f,
-                f * sparsity_loss_weight,
+                f * code_normalization,
                 f.sum(0) > 0,
+                post_relu_f,
+                post_relu_f_scaled,
+            )
+        else:
+            return f
+
+    def encode_decoupled(
+        self,
+        x: th.Tensor,
+        return_active: bool = False,
+        use_threshold: bool = True,
+        select_features: list[int] | None = None,
+    ):
+        batch_size = x.size(0)
+        post_relu_f = super().encode(x, select_features=select_features)
+        code_normalization = self.get_code_normalization(select_features)
+        post_relu_f_scaled = post_relu_f.unsqueeze(1) * code_normalization.unsqueeze(0)
+        assert post_relu_f_scaled.shape == (
+            x.shape[0],
+            self.num_layers,
+            self.dict_size,
+        )
+        if use_threshold:
+            mask = post_relu_f_scaled > self.threshold.unsqueeze(0).unsqueeze(2)
+            f = post_relu_f.unsqueeze(1) * mask
+            if return_active:
+                f_scaled = post_relu_f_scaled * mask
+        else:
+            # Flatten and perform batch top-k
+            flattened_acts_scaled = post_relu_f_scaled.transpose(0, 1).flatten(
+                start_dim=1
+            )  # (num_layers, batch_size * dict_size)
+            topk = flattened_acts_scaled.topk(self.k * batch_size, sorted=False, dim=-1)
+            topk_mask = th.zeros(
+                (self.num_layers, batch_size * self.dict_size),
+                dtype=th.bool,
+                device=post_relu_f.device,
+            )
+            topk_mask[
+                th.arange(self.num_layers, device=post_relu_f.device).unsqueeze(1),
+                topk.indices,
+            ] = True
+            topk_mask = topk_mask.reshape(
+                self.num_layers, batch_size, self.dict_size
+            ).transpose(0, 1)
+            f = post_relu_f.unsqueeze(1) * topk_mask
+            if return_active:
+                f_scaled = post_relu_f_scaled * topk_mask
+        if return_active:
+            return (
+                f,
+                f_scaled,
+                f.sum(0).sum(0) > 0,
                 post_relu_f,
                 post_relu_f_scaled,
             )
@@ -848,7 +926,7 @@ class BatchTopKCrossCoder(CrossCoder):
 
     def forward(self, x: th.Tensor, output_features=False):
         """
-        Forward pass of the cross-coder.
+        Forward pass of the crosscoder.
         x : activations to be encoded and decoded
         output_features : if True, return the encoded features as well as the decoded x
         """
@@ -874,7 +952,7 @@ class BatchTopKCrossCoder(CrossCoder):
         **kwargs,
     ):
         """
-        Load a pretrained cross-coder from a file.
+        Load a pretrained crosscoder from a file.
         """
         if from_hub:
             return super().from_pretrained(path, device=device, dtype=dtype, from_hub=True, **kwargs)
@@ -882,7 +960,7 @@ class BatchTopKCrossCoder(CrossCoder):
         state_dict = th.load(path, map_location="cpu", weights_only=True)
         if "encoder.weight" not in state_dict:
             warn(
-                "Cross-coder state dict was saved while torch.compiled was enabled. Fixing..."
+                "crosscoder state dict was saved while torch.compiled was enabled. Fixing..."
             )
             state_dict = {k.split("_orig_mod.")[1]: v for k, v in state_dict.items()}
         num_layers, activation_dim, dict_size = state_dict["encoder.weight"].shape
