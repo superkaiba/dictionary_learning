@@ -364,14 +364,13 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         min_activations = min_activation_f.min(dim=-1).values
         min_activations[min_activations == th.inf] = 0.0
         min_activations = min_activations.detach().to(dtype=th.float32)
-        if self.ae.decoupled_code:
-            for layer, threshold in enumerate(self.ae.threshold):
-                if threshold < 0:
-                    self.ae.threshold[layer] = min_activations[layer]
-                else:
-                    self.ae.threshold[layer] = (
-                        self.threshold_beta * self.ae.threshold[layer]
-                    ) + ((1 - self.threshold_beta) * min_activations[layer])
+        for layer, threshold in enumerate(self.ae.threshold):
+            if threshold < 0:
+                self.ae.threshold[layer] = min_activations[layer]
+            else:
+                self.ae.threshold[layer] = (
+                    self.threshold_beta * self.ae.threshold[layer]
+                ) + ((1 - self.threshold_beta) * min_activations[layer])
 
     def loss(self, x, step=None, logging=False, use_threshold=False, **kwargs):
         f, f_scaled, active_indices_F, post_relu_f, post_relu_f_scaled = self.ae.encode(
