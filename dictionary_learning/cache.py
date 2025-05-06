@@ -243,18 +243,22 @@ class ActivationCache:
                 truncation=True,
                 return_tensors="pt",
                 padding=True,
-            ).to(model.device) # (B, T)
+            ).to(
+                model.device
+            )  # (B, T)
 
             if token_level_replacement is not None:
                 # Iterate through the replacement dictionary and apply replacements efficiently
-                new_ids = tokens["input_ids"].clone()  # Clone to avoid modifying the original tensor if needed elsewhere
+                new_ids = tokens[
+                    "input_ids"
+                ].clone()  # Clone to avoid modifying the original tensor if needed elsewhere
                 for old_token_id, new_token_id in token_level_replacement.items():
                     # Create a mask for elements equal to the old_token_id
                     mask = new_ids == old_token_id
                     # Use the mask to update elements with the new_token_id
                     new_ids[mask] = new_token_id
                 tokens["input_ids"] = new_ids
-                
+
             attention_mask = tokens["attention_mask"]
 
             store_mask = attention_mask.clone()
