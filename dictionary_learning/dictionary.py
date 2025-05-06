@@ -916,17 +916,25 @@ class BatchTopKCrossCoder(CrossCoder):
             f = post_relu_f.unsqueeze(1) * topk_mask
             if return_active:
                 f_scaled = post_relu_f_scaled * topk_mask
-        assert f.shape == f_scaled.shape == (
-            batch_size,
-            self.num_layers,
-            self.dict_size,
+        assert (
+            f.shape
+            == f_scaled.shape
+            == (
+                batch_size,
+                self.num_layers,
+                self.dict_size,
+            )
         )
         active = f.sum(0).sum(0) > 0
         assert active.shape == (self.dict_size,)
         post_relu_f_scaled = post_relu_f_scaled.sum(dim=1)
-        assert post_relu_f_scaled.shape == post_relu_f.shape == (
-            batch_size,
-            self.dict_size,
+        assert (
+            post_relu_f_scaled.shape
+            == post_relu_f.shape
+            == (
+                batch_size,
+                self.dict_size,
+            )
         )
         if return_active:
             return (
@@ -971,10 +979,14 @@ class BatchTopKCrossCoder(CrossCoder):
                 state_dict["code_normalization_id"].item()
             ]
         elif "code_normalization" not in kwargs:
-            warn(f"No code normalization id found in {path}. This is likely due to saving the model using an older version of dictionary_learning. Assuming code_normalization is CROSSCODER, if not pass code_normalization as a from_pretrained kwarg")
+            warn(
+                f"No code normalization id found in {path}. This is likely due to saving the model using an older version of dictionary_learning. Assuming code_normalization is CROSSCODER, if not pass code_normalization as a from_pretrained kwarg"
+            )
             code_normalization = CodeNormalization.CROSSCODER
         if "k" in kwargs:
-            assert state_dict["k"] == kwargs["k"], f"k in kwargs ({kwargs['k']}) does not match k in state_dict ({state_dict['k']})"
+            assert (
+                state_dict["k"] == kwargs["k"]
+            ), f"k in kwargs ({kwargs['k']}) does not match k in state_dict ({state_dict['k']})"
             kwargs.pop("k")
         kwargs.update()
         crosscoder = cls(
@@ -983,7 +995,7 @@ class BatchTopKCrossCoder(CrossCoder):
             num_layers,
             k=state_dict["k"],
             code_normalization=code_normalization,
-            **kwargs
+            **kwargs,
         )
         crosscoder.load_state_dict(state_dict)
 

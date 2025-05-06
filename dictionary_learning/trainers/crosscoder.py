@@ -349,7 +349,9 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             )
 
     def update_decoupled_threshold(self, f_scaled: th.Tensor):
-        min_activation_f = f_scaled.clone().transpose(0, 1).reshape(self.ae.num_layers, -1)
+        min_activation_f = (
+            f_scaled.clone().transpose(0, 1).reshape(self.ae.num_layers, -1)
+        )
         min_activation_f[f_scaled <= 0] = th.inf
         min_activations = min_activation_f.min(dim=-1).values
         min_activations[min_activations == th.inf] = 0.0
