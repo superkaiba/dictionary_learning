@@ -3,18 +3,11 @@ Implements the standard SAE training scheme.
 """
 
 import torch as th
-import torch.nn as nn
 from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
 from ..dictionary import CrossCoder, BatchTopKCrossCoder
 from collections import namedtuple
-from tqdm import tqdm
 from typing import Optional
-from ..trainers.trainer import (
-    get_lr_schedule,
-    set_decoder_norm_to_unit_norm,
-    remove_gradient_parallel_to_decoder_directions,
-)
+from ..trainers.trainer import get_lr_schedule
 
 
 class CrossCoderTrainer(SAETrainer):
@@ -287,9 +280,6 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         """
         Compute an auxk loss similar than the one in TopK and BatchTopKSAE. This loss is tries to make dead latents alive again.
         """
-        if post_relu_f_scaled.dim() == 3:
-            # if decoupled code, sum over layers
-            post_relu_f_scaled = post_relu_f_scaled.sum(dim=1)
         batch_size, num_layers, model_dim = residual_BD.size()
         # reshape to (batch_size, num_layers*model_dim)
         residual_BD = residual_BD.reshape(batch_size, -1)
