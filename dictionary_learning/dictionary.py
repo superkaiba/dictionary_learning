@@ -904,10 +904,18 @@ class BatchTopKCrossCoder(CrossCoder):
         dict_size,
         num_layers,
         k: int | th.Tensor = 100,
+        norm_init_scale: float = 1.0,
         *args,
         **kwargs,
     ):
-        super().__init__(activation_dim, dict_size, num_layers, *args, **kwargs)
+        super().__init__(
+            activation_dim,
+            dict_size,
+            num_layers,
+            norm_init_scale=norm_init_scale,
+            *args,
+            **kwargs,
+        )
         self.activation_dim = activation_dim
         self.dict_size = dict_size
         self.num_layers = num_layers

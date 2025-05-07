@@ -1,5 +1,8 @@
 from typing import Optional, Callable
-from ..utils import set_decoder_norm_to_unit_norm, remove_gradient_parallel_to_decoder_directions
+from ..utils import (
+    set_decoder_norm_to_unit_norm,
+    remove_gradient_parallel_to_decoder_directions,
+)
 import torch
 import einops
 
@@ -38,8 +41,6 @@ class SAETrainer:
     @property
     def model(self):
         return self.ae
-
-
 
 
 def get_lr_schedule(
