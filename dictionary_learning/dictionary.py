@@ -13,6 +13,7 @@ import einops
 from warnings import warn
 from typing import Callable
 from enum import Enum, auto
+from trainers.trainer import set_decoder_norm_to_unit_norm
 
 
 class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
@@ -344,6 +345,90 @@ class JumpReluAutoEncoder(Dictionary, nn.Module):
         if device is not None:
             device = autoencoder.W_enc.device
         return autoencoder.to(dtype=dtype, device=device)
+
+
+class BatchTopKSAE(Dictionary, nn.Module):
+    def __init__(self, activation_dim: int, dict_size: int, k: int):
+        super().__init__()
+        self.activation_dim = activation_dim
+        self.dict_size = dict_size
+
+        assert isinstance(k, int) and k > 0, f"k={k} must be a positive integer"
+        self.register_buffer("k", th.tensor(k, dtype=th.int))
+        self.register_buffer("threshold", th.tensor(-1.0, dtype=th.float32))
+
+        self.decoder = nn.Linear(dict_size, activation_dim, bias=False)
+        self.decoder.weight.data = set_decoder_norm_to_unit_norm(
+            self.decoder.weight, activation_dim, dict_size
+        )
+
+        self.encoder = nn.Linear(activation_dim, dict_size)
+        self.encoder.weight.data = self.decoder.weight.T.clone()
+        self.encoder.bias.data.zero_()
+        self.b_dec = nn.Parameter(th.zeros(activation_dim))
+
+    def encode(
+        self, x: th.Tensor, return_active: bool = False, use_threshold: bool = True
+    ):
+        post_relu_feat_acts_BF = nn.functional.relu(self.encoder(x - self.b_dec))
+
+        if use_threshold:
+            encoded_acts_BF = post_relu_feat_acts_BF * (
+                post_relu_feat_acts_BF > self.threshold
+            )
+        else:
+            # Flatten and perform batch top-k
+            flattened_acts = post_relu_feat_acts_BF.flatten()
+            post_topk = flattened_acts.topk(self.k * x.size(0), sorted=False, dim=-1)
+
+            encoded_acts_BF = (
+                th.zeros_like(post_relu_feat_acts_BF.flatten())
+                .scatter_(-1, post_topk.indices, post_topk.values)
+                .reshape(post_relu_feat_acts_BF.shape)
+            )
+
+        if return_active:
+            return encoded_acts_BF, encoded_acts_BF.sum(0) > 0, post_relu_feat_acts_BF
+        else:
+            return encoded_acts_BF
+
+    def decode(self, x: th.Tensor) -> th.Tensor:
+        return self.decoder(x) + self.b_dec
+
+    def forward(self, x: th.Tensor, output_features: bool = False):
+        encoded_acts_BF = self.encode(x)
+        x_hat_BD = self.decode(encoded_acts_BF)
+
+        if not output_features:
+            return x_hat_BD
+        else:
+            return x_hat_BD, encoded_acts_BF
+
+    def scale_biases(self, scale: float):
+        self.encoder.bias.data *= scale
+        self.b_dec.data *= scale
+        if self.threshold >= 0:
+            self.threshold *= scale
+
+    @classmethod
+    def from_pretrained(
+        cls, path, k=None, device=None, from_hub=False, **kwargs
+    ) -> "BatchTopKSAE":
+        if from_hub:
+            return super().from_pretrained(path, device=device, **kwargs)
+
+        state_dict = th.load(path, weights_only=True)
+        dict_size, activation_dim = state_dict["encoder.weight"].shape
+        if k is None:
+            k = state_dict["k"].item()
+        elif "k" in state_dict and k != state_dict["k"].item():
+            raise ValueError(f"k={k} != {state_dict['k'].item()}=state_dict['k']")
+
+        autoencoder = cls(activation_dim, dict_size, k)
+        autoencoder.load_state_dict(state_dict)
+        if device is not None:
+            autoencoder.to(device)
+        return autoencoder
 
 
 # TODO merge this with AutoEncoder
