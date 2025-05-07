@@ -352,7 +352,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         min_activation_f = (
             f_scaled.clone().transpose(0, 1).reshape(self.ae.num_layers, -1)
         )
-        min_activation_f[f_scaled <= 0] = th.inf
+        min_activation_f[min_activation_f <= 0] = th.inf
         min_activations = min_activation_f.min(dim=-1).values
         min_activations[min_activations == th.inf] = 0.0
         min_activations = min_activations.detach().to(dtype=th.float32)
@@ -404,7 +404,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
                     "auxk_loss": auxk_loss.item(),
                     "loss": loss.item(),
                     "deads": ~did_fire,
-                    "threshold": self.ae.threshold.item(),
+                    "threshold": self.ae.threshold.tolist(),
                     "sparsity_weight": self.ae.get_code_normalization().mean().item(),
                 },
             )
