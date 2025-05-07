@@ -5,24 +5,21 @@ Training dictionaries
 import json
 import os
 from collections import defaultdict
-import torch as t
+import torch as th
 from tqdm import tqdm
-
+from warnings import warn
 import wandb
 
-from .dictionary import AutoEncoder
-from .evaluation import evaluate
-from .trainers.standard import StandardTrainer
 from .trainers.crosscoder import CrossCoderTrainer, BatchTopKCrossCoderTrainer
 
 
 def get_stats(
     trainer,
-    act: t.Tensor,
+    act: th.Tensor,
     deads_sum: bool = True,
     use_threshold: bool = True,
 ):
-    with t.no_grad():
+    with th.no_grad():
         act, act_hat, f, losslog = trainer.loss(
             act, step=0, logging=True, return_deads=True, use_threshold=use_threshold
         )
@@ -46,8 +43,8 @@ def get_stats(
     if act.dim() == 2:
         # act.shape: [batch, d_model]
         # fraction of variance explained
-        total_variance = t.var(act, dim=0).sum()
-        residual_variance = t.var(act - act_hat, dim=0).sum()
+        total_variance = th.var(act, dim=0).sum()
+        residual_variance = th.var(act - act_hat, dim=0).sum()
         frac_variance_explained = 1 - residual_variance / total_variance
     else:
         # act.shape: [batch, layer, d_model]
@@ -55,9 +52,9 @@ def get_stats(
         residual_variance_per_layer = []
 
         for l in range(act_hat.shape[1]):
-            total_variance_per_layer.append(t.var(act[:, l, :], dim=0).cpu().sum())
+            total_variance_per_layer.append(th.var(act[:, l, :], dim=0).cpu().sum())
             residual_variance_per_layer.append(
-                t.var(act[:, l, :] - act_hat[:, l, :], dim=0).cpu().sum()
+                th.var(act[:, l, :] - act_hat[:, l, :], dim=0).cpu().sum()
             )
             out[f"cl{l}_frac_variance_explained"] = (
                 1 - residual_variance_per_layer[l] / total_variance_per_layer[l]
@@ -73,13 +70,13 @@ def get_stats(
 def log_stats(
     trainer,
     step: int,
-    act: t.Tensor,
+    act: th.Tensor,
     activations_split_by_head: bool,
     transcoder: bool,
     stage: str = "train",
     use_threshold: bool = True,
 ):
-    with t.no_grad():
+    with th.no_grad():
         log = {}
         if activations_split_by_head:  # x.shape: [batch, pos, n_heads, d_head]
             act = act[..., 0, :]
@@ -101,7 +98,7 @@ def log_stats(
         wandb.log(log, step=step)
 
 
-@t.no_grad()
+@th.no_grad()
 def run_validation(
     trainer,
     validation_data,
@@ -128,24 +125,32 @@ def run_validation(
                 stats["frac_variance_explained_per_feature"]
             )
 
-        if isinstance(trainer, CrossCoderTrainer) or isinstance(
-            trainer, BatchTopKCrossCoderTrainer
-        ):
+        if isinstance(trainer, (CrossCoderTrainer, BatchTopKCrossCoderTrainer)):
             for l in range(act.shape[1]):
                 if f"cl{l}_frac_variance_explained" in stats:
                     frac_variance_explained_per_layer[l].append(
                         stats[f"cl{l}_frac_variance_explained"]
                     )
-
     log = {}
+    if isinstance(trainer, (CrossCoderTrainer, BatchTopKCrossCoderTrainer)):
+        dec_norms = trainer.ae.decoder.weight.norm(dim=-1)
+        dec_norms_sum = dec_norms.sum(dim=0)
+        for layer_idx in range(trainer.ae.decoder.num_layers):
+            dec_norm_diff = 0.5 * (
+                (2 * dec_norms[layer_idx] - dec_norms_sum)
+                / th.maximum(dec_norms[layer_idx], dec_norms_sum - dec_norms[layer_idx])
+                + 1
+            )
+            num_layer_specific_latents = (dec_norm_diff > 0.9).sum().item()
+            log[f"val/num_specific_latents_l{layer_idx}"] = num_layer_specific_latents
     if len(deads) > 0:
-        log["val/frac_deads"] = t.stack(deads).all(dim=0).float().mean().item()
+        log["val/frac_deads"] = th.stack(deads).all(dim=0).float().mean().item()
     if len(l0) > 0:
-        log["val/l0"] = t.tensor(l0).mean().item()
+        log["val/l0"] = th.tensor(l0).mean().item()
     if len(frac_variance_explained) > 0:
-        log["val/frac_variance_explained"] = t.tensor(frac_variance_explained).mean()
+        log["val/frac_variance_explained"] = th.tensor(frac_variance_explained).mean()
     if len(frac_variance_explained_per_feature) > 0:
-        frac_variance_explained_per_feature = t.stack(
+        frac_variance_explained_per_feature = th.stack(
             frac_variance_explained_per_feature
         ).cpu()  # [num_features]
         log["val/frac_variance_explained_per_feature"] = (
@@ -155,7 +160,7 @@ def run_validation(
         trainer, BatchTopKCrossCoderTrainer
     ):
         for l in frac_variance_explained_per_layer:
-            log[f"val/cl{l}_frac_variance_explained"] = t.tensor(
+            log[f"val/cl{l}_frac_variance_explained"] = th.tensor(
                 frac_variance_explained_per_layer[l]
             ).mean()
     if step is not None:
@@ -172,12 +177,12 @@ def save_model(trainer, checkpoint_name, save_dir):
         model = trainer.ae
         if hasattr(model, "_orig_mod"):  # Check if model is compiled
             model = model._orig_mod
-        t.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
+        th.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
     else:
         model = trainer.model
         if hasattr(model, "_orig_mod"):  # Check if model is compiled
             model = model._orig_mod
-        t.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
+        th.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
 
 
 def trainSAE(
@@ -226,7 +231,8 @@ def trainSAE(
         config = {"trainer": trainer.config}
         try:
             config["buffer"] = data.config
-        except:
+        except Exception as e:
+            warn(f"Error saving config: {e}")
             pass
         with open(os.path.join(save_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=4)
@@ -237,7 +243,7 @@ def trainSAE(
         act = act.to(trainer.device)
         # logging
         if log_steps is not None and step % log_steps == 0 and step != 0:
-            with t.no_grad():
+            with th.no_grad():
                 log_stats(
                     trainer,
                     step,
@@ -275,7 +281,7 @@ def trainSAE(
             logs = run_validation(trainer, validation_data, step=step)
             try:
                 os.makedirs(save_dir, exist_ok=True)
-                t.save(logs, os.path.join(save_dir, f"eval_logs_{step}.pt"))
+                th.save(logs, os.path.join(save_dir, f"eval_logs_{step}.pt"))
             except:
                 pass
 
@@ -285,7 +291,7 @@ def trainSAE(
         last_eval_logs = run_validation(trainer, validation_data, step=step)
         if save_last_eval:
             os.makedirs(save_dir, exist_ok=True)
-            t.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
+            th.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
     except Exception as e:
         print(f"Error during final validation: {str(e)}")
 
