@@ -1,4 +1,5 @@
 from typing import Optional, Callable
+from ..utils import set_decoder_norm_to_unit_norm, remove_gradient_parallel_to_decoder_directions
 import torch
 import einops
 
@@ -39,54 +40,6 @@ class SAETrainer:
         return self.ae
 
 
-# The next two functions could be replaced with the ConstrainedAdam Optimizer
-@torch.no_grad()
-def set_decoder_norm_to_unit_norm(
-    W_dec_DF: torch.nn.Parameter, activation_dim: int, d_sae: int
-) -> torch.Tensor:
-    """There's a major footgun here: we use this with both nn.Linear and nn.Parameter decoders.
-    nn.Linear stores the decoder weights in a transposed format (d_model, d_sae). So, we pass the dimensions in
-    to catch this error."""
-
-    D, F = W_dec_DF.shape
-
-    assert D == activation_dim
-    assert F == d_sae
-
-    eps = torch.finfo(W_dec_DF.dtype).eps
-    norm = torch.norm(W_dec_DF.data, dim=0, keepdim=True)
-    W_dec_DF.data /= norm + eps
-    return W_dec_DF.data
-
-
-@torch.no_grad()
-def remove_gradient_parallel_to_decoder_directions(
-    W_dec_DF: torch.Tensor,
-    W_dec_DF_grad: torch.Tensor,
-    activation_dim: int,
-    d_sae: int,
-) -> torch.Tensor:
-    """There's a major footgun here: we use this with both nn.Linear and nn.Parameter decoders.
-    nn.Linear stores the decoder weights in a transposed format (d_model, d_sae). So, we pass the dimensions in
-    to catch this error."""
-
-    D, F = W_dec_DF.shape
-    assert D == activation_dim
-    assert F == d_sae
-
-    normed_W_dec_DF = W_dec_DF / (torch.norm(W_dec_DF, dim=0, keepdim=True) + 1e-6)
-
-    parallel_component = einops.einsum(
-        W_dec_DF_grad,
-        normed_W_dec_DF,
-        "d_in d_sae, d_in d_sae -> d_sae",
-    )
-    W_dec_DF_grad -= einops.einsum(
-        parallel_component,
-        normed_W_dec_DF,
-        "d_sae, d_in d_sae -> d_in d_sae",
-    )
-    return W_dec_DF_grad
 
 
 def get_lr_schedule(

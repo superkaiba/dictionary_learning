@@ -11,8 +11,6 @@ from ..trainers.trainer import (
 )
 
 
-
-
 class BatchTopKTrainer(SAETrainer):
     def __init__(
         self,

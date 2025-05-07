@@ -13,7 +13,7 @@ import einops
 from warnings import warn
 from typing import Callable
 from enum import Enum, auto
-from trainers.trainer import set_decoder_norm_to_unit_norm
+from .utils import set_decoder_norm_to_unit_norm
 
 
 class Dictionary(ABC, nn.Module, PyTorchModelHubMixin):
