@@ -835,11 +835,14 @@ class CrossCoder(Dictionary, nn.Module):
         dtype: th.dtype = th.float32,
         device: th.device | None = None,
         from_hub: bool = False,
+        code_normalization: CodeNormalization | str | None = None,
         **kwargs,
     ):
         """
         Load a pretrained crosscoder from a file.
         """
+        if isinstance(code_normalization, str):
+            code_normalization = CodeNormalization.from_string(code_normalization)
         if from_hub:
             return super().from_pretrained(path, device=device, dtype=dtype, **kwargs)
 
@@ -850,12 +853,17 @@ class CrossCoder(Dictionary, nn.Module):
             )
             state_dict = {k.split("_orig_mod.")[1]: v for k, v in state_dict.items()}
         if "code_normalization_id" not in state_dict:
-            warn(
-                "No code normalization id found in {path}. This is likely due to saving the model using an older version of dictionary_learning. Assuming code_normalization is CROSSCODER, if not pass code_normalization as a from_pretrained kwarg"
-            )
-            state_dict["code_normalization_id"] = th.tensor(
-                CodeNormalization.CROSSCODER.value, dtype=th.int
-            )
+            if code_normalization is None:
+                warn(
+                    "No code normalization id found in {path}. This is likely due to saving the model using an older version of dictionary_learning. Assuming code_normalization is CROSSCODER, if not pass code_normalization as a from_pretrained kwarg"
+                )
+                state_dict["code_normalization_id"] = th.tensor(
+                    CodeNormalization.CROSSCODER.value, dtype=th.int
+                )
+            else:
+                state_dict["code_normalization_id"] = th.tensor(
+                    code_normalization.value, dtype=th.int
+                )
         num_layers, activation_dim, dict_size = state_dict["encoder.weight"].shape
         crosscoder = cls(
             activation_dim,
