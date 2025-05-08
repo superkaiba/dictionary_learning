@@ -1026,7 +1026,6 @@ class BatchTopKCrossCoder(CrossCoder):
                 f_scaled = post_relu_f_scaled * topk_mask
         assert (
             f.shape
-            == f_scaled.shape
             == (
                 batch_size,
                 self.num_layers,
@@ -1045,6 +1044,7 @@ class BatchTopKCrossCoder(CrossCoder):
             )
         )
         if return_active:
+            assert f_scaled.shape == f.shape
             return (
                 f,
                 f_scaled,
