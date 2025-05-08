@@ -1090,6 +1090,8 @@ class BatchTopKCrossCoder(CrossCoder):
             code_normalization=code_normalization,
             **kwargs,
         )
+        if "code_normalization_id" not in state_dict:
+            state_dict["code_normalization_id"] = code_normalization.value
         crosscoder.load_state_dict(state_dict)
 
         if device is not None:
