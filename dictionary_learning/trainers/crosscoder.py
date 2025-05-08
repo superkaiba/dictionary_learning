@@ -3,18 +3,11 @@ Implements the standard SAE training scheme.
 """
 
 import torch as th
-import torch.nn as nn
 from ..trainers.trainer import SAETrainer
-from ..config import DEBUG
 from ..dictionary import CrossCoder, BatchTopKCrossCoder
 from collections import namedtuple
-from tqdm import tqdm
 from typing import Optional
-from ..trainers.trainer import (
-    get_lr_schedule,
-    set_decoder_norm_to_unit_norm,
-    remove_gradient_parallel_to_decoder_directions,
-)
+from ..trainers.trainer import get_lr_schedule
 
 
 class CrossCoderTrainer(SAETrainer):
@@ -188,9 +181,9 @@ class CrossCoderTrainer(SAETrainer):
             "wandb_name": self.wandb_name,
             "submodule_name": self.submodule_name,
             "use_mse_loss": self.use_mse_loss,
-            "sparsity_loss_type": str(self.ae.sparsity_loss_type),
-            "sparsity_loss_alpha_sae": self.ae.sparsity_loss_alpha_sae,
-            "sparsity_loss_alpha_cc": self.ae.sparsity_loss_alpha_cc,
+            "code_normalization": str(self.ae.code_normalization),
+            "code_normalization_alpha_sae": self.ae.code_normalization_alpha_sae,
+            "code_normalization_alpha_cc": self.ae.code_normalization_alpha_cc,
         }
 
 
@@ -284,6 +277,9 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         post_relu_f: th.Tensor,
         post_relu_f_scaled: th.Tensor,
     ):
+        """
+        Compute an auxk loss similar than the one in TopK and BatchTopKSAE. This loss is tries to make dead latents alive again.
+        """
         batch_size, num_layers, model_dim = residual_BD.size()
         # reshape to (batch_size, num_layers*model_dim)
         residual_BD = residual_BD.reshape(batch_size, -1)
@@ -298,9 +294,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             ).detach()
 
             # Top-k dead latents
-            auxk_acts_scaled, auxk_indices = auxk_latents_scaled.topk(
-                k_aux, sorted=False
-            )
+            _, auxk_indices = auxk_latents_scaled.topk(k_aux, sorted=False)
             auxk_buffer_BF = th.zeros_like(post_relu_f)
             row_indices = (
                 th.arange(post_relu_f.size(0), device=post_relu_f.device)
@@ -338,7 +332,8 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             return th.tensor(0, dtype=residual_BD.dtype, device=residual_BD.device)
 
     def update_threshold(self, f_scaled: th.Tensor):
-        device_type = "cuda" if f_scaled.is_cuda else "cpu"
+        if self.ae.decoupled_code:
+            return self.update_decoupled_threshold(f_scaled)
         active = f_scaled[f_scaled > 0]
 
         if active.size(0) == 0:
@@ -352,6 +347,22 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             self.ae.threshold = (self.threshold_beta * self.ae.threshold) + (
                 (1 - self.threshold_beta) * min_activation
             )
+
+    def update_decoupled_threshold(self, f_scaled: th.Tensor):
+        min_activation_f = (
+            f_scaled.clone().transpose(0, 1).reshape(self.ae.num_layers, -1)
+        )
+        min_activation_f[min_activation_f <= 0] = th.inf
+        min_activations = min_activation_f.min(dim=-1).values
+        min_activations[min_activations == th.inf] = 0.0
+        min_activations = min_activations.detach().to(dtype=th.float32)
+        for layer, threshold in enumerate(self.ae.threshold):
+            if threshold < 0:
+                self.ae.threshold[layer] = min_activations[layer]
+            else:
+                self.ae.threshold[layer] = (
+                    self.threshold_beta * self.ae.threshold[layer]
+                ) + ((1 - self.threshold_beta) * min_activations[layer])
 
     def loss(self, x, step=None, logging=False, use_threshold=False, **kwargs):
         f, f_scaled, active_indices_F, post_relu_f, post_relu_f_scaled = self.ae.encode(
@@ -393,8 +404,8 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
                     "auxk_loss": auxk_loss.item(),
                     "loss": loss.item(),
                     "deads": ~did_fire,
-                    "threshold": self.ae.threshold.item(),
-                    "sparsity_weight": self.ae.get_sparsity_loss_weight().mean().item(),
+                    "threshold": self.ae.threshold.tolist(),
+                    "sparsity_weight": self.ae.get_code_normalization().mean().item(),
                 },
             )
 
@@ -434,9 +445,9 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "activation_dim": self.ae.activation_dim,
             "dict_size": self.ae.dict_size,
             "k": self.ae.k.item(),
-            "sparsity_loss_type": str(self.ae.sparsity_loss_type),
-            "sparsity_loss_alpha_sae": self.ae.sparsity_loss_alpha_sae,
-            "sparsity_loss_alpha_cc": self.ae.sparsity_loss_alpha_cc,
+            "code_normalization": str(self.ae.code_normalization),
+            "code_normalization_alpha_sae": self.ae.code_normalization_alpha_sae,
+            "code_normalization_alpha_cc": self.ae.code_normalization_alpha_cc,
             "device": self.device,
             "layer": self.layer,
             "lm_name": self.lm_name,

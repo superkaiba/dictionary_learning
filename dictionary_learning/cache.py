@@ -25,7 +25,6 @@ class ActivationShard:
         self,
         store_dir: str,
         shard_idx: int,
-
     ):
         self.shard_file = os.path.join(store_dir, f"shard_{shard_idx}.memmap")
         with open(self.shard_file.replace(".memmap", ".meta"), "r") as f:
@@ -79,8 +78,7 @@ class ActivationCache:
         self.store_dir = store_dir
         self.config = json.load(open(os.path.join(store_dir, "config.json"), "r"))
         self.shards = [
-            ActivationShard(store_dir, i)
-            for i in range(self.config["shard_count"])
+            ActivationShard(store_dir, i) for i in range(self.config["shard_count"])
         ]
         self._range_to_shard_idx = np.cumsum([0] + [s.shape[0] for s in self.shards])
         if "store_tokens" in self.config and self.config["store_tokens"]:
@@ -216,6 +214,7 @@ class ActivationCache:
         store_tokens: bool = False,
         multiprocessing: bool = True,
         ignore_first_n_tokens_per_sample: int = 0,
+        token_level_replacement: dict = None,
     ):
         assert (
             not shuffle_shards or not store_tokens
@@ -244,7 +243,22 @@ class ActivationCache:
                 truncation=True,
                 return_tensors="pt",
                 padding=True,
-            ).to(model.device)
+            ).to(
+                model.device
+            )  # (B, T)
+
+            if token_level_replacement is not None:
+                # Iterate through the replacement dictionary and apply replacements efficiently
+                new_ids = tokens[
+                    "input_ids"
+                ].clone()  # Clone to avoid modifying the original tensor if needed elsewhere
+                for old_token_id, new_token_id in token_level_replacement.items():
+                    # Create a mask for elements equal to the old_token_id
+                    mask = new_ids == old_token_id
+                    # Use the mask to update elements with the new_token_id
+                    new_ids[mask] = new_token_id
+                tokens["input_ids"] = new_ids
+
             attention_mask = tokens["attention_mask"]
 
             store_mask = attention_mask.clone()
