@@ -1052,6 +1052,21 @@ class BatchTopKCrossCoder(CrossCoder):
         else:
             return f
 
+    def get_activations(
+        self, x: th.Tensor, use_threshold: bool = True, select_features=None, **kwargs
+    ):
+        _, f, _, _ = self.encode(
+            x,
+            use_threshold=use_threshold,
+            return_active=True,
+            select_features=select_features,
+            **kwargs,
+        )
+        if f.dim() == 3:
+            f = f.sum(1)
+        assert f.shape == (x.shape[0], self.dict_size)
+        return f
+
     @classmethod
     def from_pretrained(
         cls,
