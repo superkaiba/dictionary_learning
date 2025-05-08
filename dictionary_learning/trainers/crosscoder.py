@@ -442,7 +442,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "lm_name": self.lm_name,
             "wandb_name": self.wandb_name,
             "submodule_name": self.submodule_name,
-            "dict_class_kwargs": self.dict_class_kwargs,
+            "dict_class_kwargs": {k: str(v) for k, v in self.dict_class_kwargs.items()},
         }
 
     @staticmethod
