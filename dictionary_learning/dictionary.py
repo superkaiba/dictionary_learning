@@ -1091,7 +1091,9 @@ class BatchTopKCrossCoder(CrossCoder):
             **kwargs,
         )
         if "code_normalization_id" not in state_dict:
-            state_dict["code_normalization_id"] = code_normalization.value
+            state_dict["code_normalization_id"] = th.tensor(
+                code_normalization.value, dtype=th.int
+            )
         crosscoder.load_state_dict(state_dict)
 
         if device is not None:
