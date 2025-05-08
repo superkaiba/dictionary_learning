@@ -1024,13 +1024,10 @@ class BatchTopKCrossCoder(CrossCoder):
             f = post_relu_f.unsqueeze(1) * topk_mask
             if return_active:
                 f_scaled = post_relu_f_scaled * topk_mask
-        assert (
-            f.shape
-            == (
-                batch_size,
-                self.num_layers,
-                self.dict_size,
-            )
+        assert f.shape == (
+            batch_size,
+            self.num_layers,
+            self.dict_size,
         )
         active = f.sum(0).sum(0) > 0
         assert active.shape == (self.dict_size,)
