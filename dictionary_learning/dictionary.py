@@ -1055,7 +1055,7 @@ class BatchTopKCrossCoder(CrossCoder):
     def get_activations(
         self, x: th.Tensor, use_threshold: bool = True, select_features=None, **kwargs
     ):
-        _, f, _, _ = self.encode(
+        _, f, *_ = self.encode(
             x,
             use_threshold=use_threshold,
             return_active=True,
