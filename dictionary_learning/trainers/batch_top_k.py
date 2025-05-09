@@ -148,7 +148,6 @@ class BatchTopKTrainer(SAETrainer):
         f, active_indices_F, post_relu_acts_BF = self.ae.encode(
             x, return_active=True, use_threshold=use_threshold
         )
-        # l0 = (f != 0).float().sum(dim=-1).mean().item()
 
         if step > self.threshold_start_step:
             self.update_threshold(f)
@@ -172,6 +171,9 @@ class BatchTopKTrainer(SAETrainer):
         if not logging:
             return loss
         else:
+            if self.ae.decoupled_code:
+                f = f.sum(dim=1)
+            assert f.shape == (x.shape[0], self.ae.dict_size)
             return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(
                 x,
                 x_hat,
