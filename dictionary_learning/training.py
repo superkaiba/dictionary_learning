@@ -103,6 +103,7 @@ def run_validation(
     trainer,
     validation_data,
     step: int = None,
+    dtype: th.dtype = th.float32,
 ):
     l0 = []
     frac_variance_explained = []
@@ -113,7 +114,7 @@ def run_validation(
     ):
         frac_variance_explained_per_layer = defaultdict(list)
     for val_step, act in enumerate(tqdm(validation_data, total=len(validation_data))):
-        act = act.to(trainer.device)
+        act = act.to(trainer.device).to(dtype)
         stats = get_stats(trainer, act, deads_sum=False)
         l0.append(stats["l0"])
         if "frac_deads" in stats:
@@ -203,6 +204,7 @@ def trainSAE(
     end_of_step_logging_fn=None,
     save_last_eval=True,
     start_of_training_eval=False,
+    dtype=th.float32,
 ):
     """
     Train SAE using the given trainer
@@ -224,6 +226,8 @@ def trainSAE(
         mode="disabled" if not use_wandb else "online",
     )
 
+    trainer.model.to(dtype)
+
     # make save dir, export config
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
@@ -240,7 +244,8 @@ def trainSAE(
     for step, act in enumerate(tqdm(data, total=steps)):
         if steps is not None and step >= steps:
             break
-        act = act.to(trainer.device)
+        act = act.to(trainer.device).to(dtype)
+
         # logging
         if log_steps is not None and step % log_steps == 0 and step != 0:
             with th.no_grad():
@@ -278,7 +283,7 @@ def trainSAE(
             and (start_of_training_eval or step > 0)
         ):
             print(f"Validating at step {step}")
-            logs = run_validation(trainer, validation_data, step=step)
+            logs = run_validation(trainer, validation_data, step=step, dtype=dtype)
             try:
                 os.makedirs(save_dir, exist_ok=True)
                 th.save(logs, os.path.join(save_dir, f"eval_logs_{step}.pt"))
@@ -288,7 +293,9 @@ def trainSAE(
         if end_of_step_logging_fn is not None:
             end_of_step_logging_fn(trainer, step)
     try:
-        last_eval_logs = run_validation(trainer, validation_data, step=step)
+        last_eval_logs = run_validation(
+            trainer, validation_data, step=step, dtype=dtype
+        )
         if save_last_eval:
             os.makedirs(save_dir, exist_ok=True)
             th.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
