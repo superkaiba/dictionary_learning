@@ -989,6 +989,13 @@ class BatchTopKCrossCoder(CrossCoder):
         use_threshold: bool = True,
         select_features: list[int] | None = None,
     ):
+        if select_features is not None and not use_threshold:
+            raise ValueError(
+                "select_features is not supported when use_threshold is False"
+            )
+        num_latents = (
+            self.dict_size if select_features is None else len(select_features)
+        )
         batch_size = x.size(0)
         post_relu_f = super().encode(x, select_features=select_features)
         code_normalization = self.get_code_normalization(select_features)
@@ -996,7 +1003,7 @@ class BatchTopKCrossCoder(CrossCoder):
         assert post_relu_f_scaled.shape == (
             x.shape[0],
             self.num_layers,
-            self.dict_size,
+            num_latents,
         )
         if use_threshold:
             mask = post_relu_f_scaled > self.threshold.unsqueeze(0).unsqueeze(2)
@@ -1027,17 +1034,17 @@ class BatchTopKCrossCoder(CrossCoder):
         assert f.shape == (
             batch_size,
             self.num_layers,
-            self.dict_size,
+            num_latents,
         )
         active = f.sum(0).sum(0) > 0
-        assert active.shape == (self.dict_size,)
+        assert active.shape == (num_latents,)
         post_relu_f_scaled = post_relu_f_scaled.sum(dim=1)
         assert (
             post_relu_f_scaled.shape
             == post_relu_f.shape
             == (
                 batch_size,
-                self.dict_size,
+                num_latents,
             )
         )
         if return_active:
@@ -1055,17 +1062,17 @@ class BatchTopKCrossCoder(CrossCoder):
     def get_activations(
         self, x: th.Tensor, use_threshold: bool = True, select_features=None, **kwargs
     ):
-        _, f, *_ = self.encode(
+        _, f_scaled, *_ = self.encode(
             x,
             use_threshold=use_threshold,
             return_active=True,
             select_features=select_features,
             **kwargs,
         )
-        if f.dim() == 3:
-            f = f.sum(1)
-        assert f.shape == (x.shape[0], self.dict_size)
-        return f
+        if self.decoupled_code:
+            f_scaled = f_scaled.sum(1)
+        assert f_scaled.shape == (x.shape[0], self.dict_size)
+        return f_scaled
 
     @classmethod
     def from_pretrained(
