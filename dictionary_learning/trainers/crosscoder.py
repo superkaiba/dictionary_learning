@@ -150,7 +150,7 @@ class CrossCoderTrainer(SAETrainer):
         activations = activations.to(self.device)
 
         self.optimizer.zero_grad()
-        loss = self.loss(activations)
+        loss = self.loss(activations, step=step)
         loss.backward()
         self.optimizer.step()
         self.scheduler.step()
@@ -193,10 +193,12 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         steps: int,  # total number of steps to train for
         activation_dim: int,
         dict_size: int,
-        k: int,
+        k: int, # Target k value
         layer: int,
         lm_name: str,
         num_layers: int = 2,
+        k_max: Optional[int] = None, # Initial k value for annealing (defaults to k)
+        k_annealing_steps: int = 0, # Steps to anneal k from k_max to k
         dict_class: type = BatchTopKCrossCoder,
         lr: Optional[float] = None,
         auxk_alpha: float = 1 / 32,
@@ -220,7 +222,12 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         self.steps = steps
         self.decay_start = decay_start
         self.warmup_steps = warmup_steps
-        self.k = k
+        
+        # Store k annealing parameters
+        self.k_target = k
+        self.k_initial = k_max if k_max is not None else k
+        self.k_annealing_total_steps = k_annealing_steps
+        
         self.threshold_beta = threshold_beta
         self.threshold_start_step = threshold_start_step
 
@@ -231,7 +238,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         # initialize dictionary
         if pretrained_ae is None:
             self.ae = dict_class(
-                activation_dim, dict_size, num_layers, k, **dict_class_kwargs
+                activation_dim, dict_size, num_layers, self.k_initial, **dict_class_kwargs
             )
         else:
             self.ae = pretrained_ae
@@ -257,11 +264,13 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "effective_l0",
             "running_deads",
             "pre_norm_auxk_loss",
+            "k_current_value",
         ]
         self.dict_class_kwargs = dict_class_kwargs
         self.effective_l0 = -1
         self.running_deads = -1
         self.pre_norm_auxk_loss = -1
+        self.k_current_value = self.k_initial
 
         self.optimizer = th.optim.Adam(
             self.ae.parameters(), lr=self.lr, betas=(0.9, 0.999)
@@ -365,6 +374,25 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
                 ) + ((1 - self.threshold_beta) * min_activations[layer])
 
     def loss(self, x, step=None, logging=False, use_threshold=False, **kwargs):
+        if step is not None:
+            # Update k for annealing if applicable
+            if self.k_annealing_total_steps > 0 and self.k_initial != self.k_target:
+                if step < self.k_annealing_total_steps:
+                    progress = float(step) / self.k_annealing_total_steps
+                    # Linear interpolation from k_initial down to k_target
+                    current_k_float = self.k_initial - (self.k_initial - self.k_target) * progress
+                    new_k_val = max(1, int(round(current_k_float)))
+                    if self.ae.k.item() != new_k_val:
+                        self.ae.k.fill_(new_k_val)
+                else:  # Annealing finished, ensure k is set to k_target
+                    if self.ae.k.item() != self.k_target:
+                        self.ae.k.fill_(self.k_target)
+            elif self.k_annealing_total_steps == 0 and self.ae.k.item() != self.k_initial:
+                # If no annealing steps, k should be fixed at k_initial
+                self.ae.k.fill_(self.k_initial)
+        
+        self.k_current_value = self.ae.k.item()
+
         f, f_scaled, active_indices_F, post_relu_f, post_relu_f_scaled = self.ae.encode(
             x, return_active=True, use_threshold=use_threshold
         )  # (batch_size, dict_size)
@@ -378,7 +406,7 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
         e = x - x_hat
         assert e.shape == x.shape
 
-        self.effective_l0 = self.k
+        self.effective_l0 = self.ae.k.item()
 
         num_tokens_in_step = x.size(0)
         did_fire = th.zeros_like(self.num_tokens_since_fired, dtype=th.bool)
@@ -445,6 +473,9 @@ class BatchTopKCrossCoderTrainer(SAETrainer):
             "activation_dim": self.ae.activation_dim,
             "dict_size": self.ae.dict_size,
             "k": self.ae.k.item(),
+            "k_target": self.k_target,
+            "k_initial": self.k_initial,
+            "k_annealing_steps": self.k_annealing_total_steps,
             "code_normalization": str(self.ae.code_normalization),
             "code_normalization_alpha_sae": self.ae.code_normalization_alpha_sae,
             "code_normalization_alpha_cc": self.ae.code_normalization_alpha_cc,

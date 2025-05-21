@@ -17,11 +17,12 @@ def get_stats(
     trainer,
     act: th.Tensor,
     deads_sum: bool = True,
+    step: int = None,
     use_threshold: bool = True,
 ):
     with th.no_grad():
         act, act_hat, f, losslog = trainer.loss(
-            act, step=0, logging=True, return_deads=True, use_threshold=use_threshold
+            act, step=step, logging=True, return_deads=True, use_threshold=use_threshold
         )
 
     # L0
@@ -81,7 +82,7 @@ def log_stats(
         if activations_split_by_head:  # x.shape: [batch, pos, n_heads, d_head]
             act = act[..., 0, :]
         if not transcoder:
-            stats = get_stats(trainer, act, use_threshold=use_threshold)
+            stats = get_stats(trainer, act, step=step, use_threshold=use_threshold)
             log.update({f"{stage}/{k}": v for k, v in stats.items()})
         else:  # transcoder
             x, x_hat, f, losslog = trainer.loss(act, step=step, logging=True)
@@ -115,7 +116,7 @@ def run_validation(
         frac_variance_explained_per_layer = defaultdict(list)
     for val_step, act in enumerate(tqdm(validation_data, total=len(validation_data))):
         act = act.to(trainer.device).to(dtype)
-        stats = get_stats(trainer, act, deads_sum=False)
+        stats = get_stats(trainer, act, deads_sum=False, step=step)
         l0.append(stats["l0"])
         if "frac_deads" in stats:
             deads.append(stats["frac_deads"])
