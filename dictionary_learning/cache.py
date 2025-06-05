@@ -334,8 +334,6 @@ class ActivationCache:
                             .reshape(-1, d_model)
                             .save()
                         )  # (B x T) x D
-                        if dtype is not None:
-                            local_activations = local_activations.to(dtype)
                         activation_cache[i].append(local_activations)
 
                     if last_submodule is not None:
@@ -347,6 +345,8 @@ class ActivationCache:
                         .value[store_mask.reshape(-1).bool()]
                         .cpu()
                     )  # remove padding tokens
+                    if dtype is not None:
+                        activation_cache[i][-1] = activation_cache[i][-1].to(dtype)
 
                 assert len(tokens_cache[-1]) == activation_cache[0][-1].shape[0]
                 assert activation_cache[0][-1].shape[0] == store_mask.sum().item()
