@@ -193,27 +193,32 @@ class ActivationCache:
         else:
             return None
 
-
     @staticmethod
-    def exists(store_dir: str, submodule_names: Tuple[str], io: str, store_tokens: bool):
+    def exists(
+        store_dir: str, submodule_names: Tuple[str], io: str, store_tokens: bool
+    ):
         """
         Check if cached activations exist for the given configuration.
-        
+
         Args:
             store_dir: Base directory where cached activations are stored
             submodule_names: Names of the submodules to check for cached activations
             io: Input/output type ("in" or "out") specifying which activations to check
             store_tokens: Whether tokens should also be stored and checked for existence
-            
+
         Returns:
             Tuple[bool, int]: (exists, num_tokens) where exists indicates if all required
             cached data is present and num_tokens is the total number of tokens in the cache
         """
         num_tokens = 0
         for submodule_name in submodule_names:
-            if not os.path.exists(os.path.join(store_dir, f"{submodule_name}_{io}", "config.json")):
+            if not os.path.exists(
+                os.path.join(store_dir, f"{submodule_name}_{io}", "config.json")
+            ):
                 return False, 0
-            with open(os.path.join(store_dir, f"{submodule_name}_{io}", "config.json"), "r") as f:
+            with open(
+                os.path.join(store_dir, f"{submodule_name}_{io}", "config.json"), "r"
+            ) as f:
                 num_tokens = json.load(f)["total_size"]
         if store_tokens and not os.path.exists(os.path.join(store_dir, "tokens.pt")):
             return False, 0
@@ -296,8 +301,13 @@ class ActivationCache:
                 )
 
             # Check all store_sub_dirs and ensure they have the same shape
-            shapes = [ActivationCache.shard_exists(store_sub_dir, shard_count) for store_sub_dir in store_sub_dirs]
-            if all(s is not None for s in shapes) and all(s == shapes[0] for s in shapes):
+            shapes = [
+                ActivationCache.shard_exists(store_sub_dir, shard_count)
+                for store_sub_dir in store_sub_dirs
+            ]
+            if all(s is not None for s in shapes) and all(
+                s == shapes[0] for s in shapes
+            ):
                 shape = shapes[0]
             else:
                 shape = None
