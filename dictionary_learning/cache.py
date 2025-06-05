@@ -193,6 +193,32 @@ class ActivationCache:
         else:
             return None
 
+
+    @staticmethod
+    def exists(store_dir: str, submodule_names: Tuple[str], io: str, store_tokens: bool):
+        """
+        Check if cached activations exist for the given configuration.
+        
+        Args:
+            store_dir: Base directory where cached activations are stored
+            submodule_names: Names of the submodules to check for cached activations
+            io: Input/output type ("in" or "out") specifying which activations to check
+            store_tokens: Whether tokens should also be stored and checked for existence
+            
+        Returns:
+            Tuple[bool, int]: (exists, num_tokens) where exists indicates if all required
+            cached data is present and num_tokens is the total number of tokens in the cache
+        """
+        num_tokens = 0
+        for submodule_name in submodule_names:
+            if not os.path.exists(os.path.join(store_dir, f"{submodule_name}_{io}", "config.json")):
+                return False, 0
+            with open(os.path.join(store_dir, f"{submodule_name}_{io}", "config.json"), "r") as f:
+                num_tokens = json.load(f)["total_size"]
+        if store_tokens and not os.path.exists(os.path.join(store_dir, "tokens.pt")):
+            return False, 0
+        return True, num_tokens
+
     @th.no_grad()
     @staticmethod
     def collect(
@@ -223,12 +249,12 @@ class ActivationCache:
 
         activation_cache = [[] for _ in submodules]
         tokens_cache = []
-        store_dirs = [
+        store_sub_dirs = [
             os.path.join(store_dir, f"{submodule_names[i]}_{io}")
             for i in range(len(submodules))
         ]
-        for store_dir in store_dirs:
-            os.makedirs(store_dir, exist_ok=True)
+        for store_sub_dir in store_sub_dirs:
+            os.makedirs(store_sub_dir, exist_ok=True)
         total_size = 0
         current_size = 0
         shard_count = 0
@@ -269,7 +295,12 @@ class ActivationCache:
                     tokens["input_ids"].reshape(-1)[store_mask.reshape(-1).bool()]
                 )
 
-            shape = ActivationCache.shard_exists(store_dir, shard_count)
+            # Check all store_sub_dirs and ensure they have the same shape
+            shapes = [ActivationCache.shard_exists(store_sub_dir, shard_count) for store_sub_dir in store_sub_dirs]
+            if all(s is not None for s in shapes) and all(s == shapes[0] for s in shapes):
+                shape = shapes[0]
+            else:
+                shape = None
             if overwrite or shape is None:
                 with model.trace(
                     tokens,
@@ -310,7 +341,7 @@ class ActivationCache:
                 else:
                     print(f"Storing shard {shard_count}...", flush=True)
                     ActivationCache.collate_store_shards(
-                        store_dirs,
+                        store_sub_dirs,
                         shard_count,
                         activation_cache,
                         submodule_names,
@@ -330,7 +361,7 @@ class ActivationCache:
 
         if current_size > 0:
             ActivationCache.collate_store_shards(
-                store_dirs,
+                store_sub_dirs,
                 shard_count,
                 activation_cache,
                 submodule_names,
@@ -339,15 +370,9 @@ class ActivationCache:
                 multiprocessing=multiprocessing,
             )
 
-        if store_tokens:
-            print("Storing tokens...")
-            tokens_cache = th.cat(tokens_cache, dim=0)
-            assert tokens_cache.shape[0] == total_size
-            th.save(tokens_cache, os.path.join(store_dir, "tokens.pt"))
-
         # store configs
-        for i, store_dir in enumerate(store_dirs):
-            with open(os.path.join(store_dir, "config.json"), "w") as f:
+        for i, store_sub_dir in enumerate(store_sub_dirs):
+            with open(os.path.join(store_sub_dir, "config.json"), "w") as f:
                 json.dump(
                     {
                         "batch_size": batch_size,
@@ -362,6 +387,14 @@ class ActivationCache:
                     },
                     f,
                 )
+
+        # store tokens
+        if store_tokens:
+            print("Storing tokens...")
+            tokens_cache = th.cat(tokens_cache, dim=0)
+            assert tokens_cache.shape[0] == total_size
+            th.save(tokens_cache, os.path.join(store_dir, "tokens.pt"))
+
         ActivationCache.cleanup_multiprocessing()
         print(f"Finished collecting activations. Total size: {total_size}")
 
