@@ -1071,7 +1071,7 @@ class BatchTopKCrossCoder(CrossCoder):
         )
         if self.decoupled_code:
             f_scaled = f_scaled.sum(1)
-        assert f_scaled.shape == (x.shape[0], self.dict_size)
+        assert f_scaled.shape == (x.shape[0], len(select_features) if select_features is not None else self.dict_size)
         return f_scaled
 
     @classmethod
