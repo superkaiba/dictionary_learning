@@ -431,9 +431,9 @@ class ActivationCache:
 
 
 class PairedActivationCache:
-    def __init__(self, store_dir_1: str, store_dir_2: str):
-        self.activation_cache_1 = ActivationCache(store_dir_1)
-        self.activation_cache_2 = ActivationCache(store_dir_2)
+    def __init__(self, store_dir_1: str, store_dir_2: str, submodule_name: str = None):
+        self.activation_cache_1 = ActivationCache(store_dir_1, submodule_name)
+        self.activation_cache_2 = ActivationCache(store_dir_2, submodule_name)
         assert len(self.activation_cache_1) == len(self.activation_cache_2)
 
     def __len__(self):
