@@ -257,6 +257,7 @@ class ActivationCache:
         multiprocessing: bool = True,
         ignore_first_n_tokens_per_sample: int = 0,
         token_level_replacement: dict = None,
+        add_special_tokens: bool = True,
         dtype: th.dtype = None,
     ):
         assert (
@@ -286,6 +287,7 @@ class ActivationCache:
                 truncation=True,
                 return_tensors="pt",
                 padding=True,
+                add_special_tokens=add_special_tokens,
             ).to(
                 model.device
             )  # (B, T)
