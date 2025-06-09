@@ -206,6 +206,7 @@ def trainSAE(
     save_last_eval=True,
     start_of_training_eval=False,
     dtype=th.float32,
+    wandb_dir=None,
 ):
     """
     Train SAE using the given trainer
@@ -225,6 +226,7 @@ def trainSAE(
         config=wandb_config,
         name=wandb_config["wandb_name"],
         mode="disabled" if not use_wandb else "online",
+        dir=wandb_dir if wandb_dir is not None else None,
     )
 
     trainer.model.to(dtype)
@@ -242,7 +244,7 @@ def trainSAE(
         with open(os.path.join(save_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=4)
 
-    for step, act in enumerate(tqdm(data, total=steps)):
+    for step, (act, tokens) in enumerate(tqdm(data, total=steps)):
         if steps is not None and step >= steps:
             break
         act = act.to(trainer.device).to(dtype)
@@ -294,12 +296,13 @@ def trainSAE(
         if end_of_step_logging_fn is not None:
             end_of_step_logging_fn(trainer, step)
     try:
-        last_eval_logs = run_validation(
-            trainer, validation_data, step=step, dtype=dtype
-        )
-        if save_last_eval:
-            os.makedirs(save_dir, exist_ok=True)
-            th.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
+        if validation_data is not None:
+            last_eval_logs = run_validation(
+                trainer, validation_data, step=step, dtype=dtype
+            )
+            if save_last_eval:
+                os.makedirs(save_dir, exist_ok=True)
+                th.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
     except Exception as e:
         print(f"Error during final validation: {str(e)}")
 
@@ -307,5 +310,6 @@ def trainSAE(
     if save_dir is not None:
         save_model(trainer, f"model_final.pt", save_dir)
 
+    return trainer
     if use_wandb:
         wandb.finish()
