@@ -9,6 +9,8 @@ import torch as th
 from tqdm import tqdm
 from warnings import warn
 import wandb
+import torch.distributed as dist
+import torch.nn.parallel as parallel
 
 from .trainers.crosscoder import CrossCoderTrainer, BatchTopKCrossCoderTrainer
 
@@ -179,11 +181,17 @@ def save_model(trainer, checkpoint_name, save_dir):
         model = trainer.ae
         if hasattr(model, "_orig_mod"):  # Check if model is compiled
             model = model._orig_mod
+        # If using DDP, save the module without wrapper
+        if isinstance(model, parallel.DistributedDataParallel):
+            model = model.module
         th.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
     else:
         model = trainer.model
         if hasattr(model, "_orig_mod"):  # Check if model is compiled
             model = model._orig_mod
+        # If using DDP, save the module without wrapper
+        if isinstance(model, parallel.DistributedDataParallel):
+            model = model.module
         th.save(model.state_dict(), os.path.join(save_dir, checkpoint_name))
 
 
@@ -215,24 +223,53 @@ def trainSAE(
         validation_data is None and validate_every_n_steps is not None
     ), "Must provide validation data if validate_every_n_steps is not None"
 
+    # Extract distributed training parameters
+    distributed = trainer_config.get("distributed", False)
+    rank = trainer_config.get("rank", 0)
+    world_size = trainer_config.get("world_size", 1)
+    
+    # Only use wandb on main process if distributed
+    if distributed and rank != 0:
+        use_wandb = False
+    
     trainer_class = trainer_config["trainer"]
     del trainer_config["trainer"]
+    
+    # Remove distributed parameters from trainer config
+    if "distributed" in trainer_config:
+        del trainer_config["distributed"]
+    if "rank" in trainer_config:
+        del trainer_config["rank"]
+    if "world_size" in trainer_config:
+        del trainer_config["world_size"]
+        
     trainer = trainer_class(**trainer_config)
 
     wandb_config = trainer.config | run_cfg
-    wandb.init(
-        entity=wandb_entity,
-        project=wandb_project,
-        config=wandb_config,
-        name=wandb_config["wandb_name"],
-        mode="disabled" if not use_wandb else "online",
-        dir=wandb_dir if wandb_dir is not None else None,
-    )
+    if use_wandb:
+        wandb.init(
+            entity=wandb_entity,
+            project=wandb_project,
+            config=wandb_config,
+            name=wandb_config["wandb_name"],
+            mode="disabled" if not use_wandb else "online",
+            dir=wandb_dir if wandb_dir is not None else None,
+        )
 
     trainer.model.to(dtype)
+    
+    # Set up distributed training if enabled
+    if distributed:
+        # Wrap model with DistributedDataParallel
+        local_rank = rank % th.cuda.device_count()
+        trainer.model = parallel.DistributedDataParallel(
+            trainer.model, 
+            device_ids=[local_rank],
+            output_device=local_rank
+        )
 
     # make save dir, export config
-    if save_dir is not None:
+    if save_dir is not None and (not distributed or rank == 0):
         os.makedirs(save_dir, exist_ok=True)
         # save config
         config = {"trainer": trainer.config}
@@ -245,71 +282,39 @@ def trainSAE(
             json.dump(config, f, indent=4)
 
     for step, (act, tokens) in enumerate(tqdm(data, total=steps)):
-        if steps is not None and step >= steps:
+        if step >= steps:
             break
+
         act = act.to(trainer.device).to(dtype)
 
-        # logging
-        if log_steps is not None and step % log_steps == 0 and step != 0:
-            with th.no_grad():
-                log_stats(
-                    trainer,
-                    step,
-                    act,
-                    activations_split_by_head,
-                    transcoder,
-                    use_threshold=False,
-                )
-                if isinstance(trainer, BatchTopKCrossCoderTrainer):
-                    log_stats(
-                        trainer,
-                        step,
-                        act,
-                        activations_split_by_head,
-                        transcoder,
-                        use_threshold=True,
-                        stage="trainthres",
-                    )
-
-        # saving
-        if save_steps is not None and step % save_steps == 0:
-            print(f"Saving at step {step}")
-            if save_dir is not None:
-                save_model(trainer, f"checkpoint_{step}.pt", save_dir)
-
-        # training
         trainer.update(step, act)
+
+        if log_steps is not None and step % log_steps == 0 and use_wandb:
+            log_stats(
+                trainer,
+                step,
+                act,
+                activations_split_by_head=activations_split_by_head,
+                transcoder=transcoder,
+            )
+
+        if save_steps is not None and step % save_steps == 0 and save_dir is not None and (not distributed or rank == 0):
+            save_model(trainer, f"step_{step}.pt", save_dir)
 
         if (
             validate_every_n_steps is not None
             and step % validate_every_n_steps == 0
-            and (start_of_training_eval or step > 0)
+            and use_wandb
         ):
-            print(f"Validating at step {step}")
-            logs = run_validation(trainer, validation_data, step=step, dtype=dtype)
-            try:
-                os.makedirs(save_dir, exist_ok=True)
-                th.save(logs, os.path.join(save_dir, f"eval_logs_{step}.pt"))
-            except:
-                pass
+            run_validation(trainer, validation_data, step=step, dtype=dtype)
 
         if end_of_step_logging_fn is not None:
-            end_of_step_logging_fn(trainer, step)
-    try:
-        if validation_data is not None:
-            last_eval_logs = run_validation(
-                trainer, validation_data, step=step, dtype=dtype
-            )
-            if save_last_eval:
-                os.makedirs(save_dir, exist_ok=True)
-                th.save(last_eval_logs, os.path.join(save_dir, f"last_eval_logs.pt"))
-    except Exception as e:
-        print(f"Error during final validation: {str(e)}")
+            end_of_step_logging_fn(step, trainer, act)
 
-    # save final SAE
-    if save_dir is not None:
-        save_model(trainer, f"model_final.pt", save_dir)
+    if save_dir is not None and (not distributed or rank == 0):
+        save_model(trainer, "final.pt", save_dir)
+
+    if save_last_eval and validation_data is not None and use_wandb:
+        run_validation(trainer, validation_data, step=step, dtype=dtype)
 
     return trainer
-    if use_wandb:
-        wandb.finish()
